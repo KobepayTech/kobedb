@@ -141,9 +141,36 @@ export class KobeClient {
       });
       this.session = null;
     },
+    // Passwordless magic link. Returns the action_link (dev) / triggers email (prod).
+    signInWithOtp: async (email: string) =>
+      req(`${this.url}/auth/v1/magiclink`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }),
+      }),
+    // Build the URL to start an OAuth flow (redirect the browser here).
+    getOAuthUrl: (provider: 'google' | 'github', redirectTo?: string) =>
+      `${this.url}/auth/v1/authorize?provider=${provider}` +
+      (redirectTo ? `&redirect_to=${encodeURIComponent(redirectTo)}` : ''),
+    signInWithOAuth: (provider: 'google' | 'github', redirectTo?: string) => {
+      const url = this.auth.getOAuthUrl(provider, redirectTo);
+      if (typeof window !== 'undefined') window.location.href = url;
+      return url;
+    },
     user: () => this.session?.user ?? null,
     getSession: () => this.session,
     setSession: (s: Session | null) => { this.session = s; },
+  };
+
+  /** Invoke an edge function by name. */
+  functions = {
+    invoke: async (name: string, options: { method?: string; body?: any } = {}) => {
+      const method = options.method ?? 'POST';
+      const hasBody = method !== 'GET' && options.body !== undefined;
+      return req(`${this.url}/functions/v1/${name}`, {
+        method,
+        headers: { 'Content-Type': 'application/json', ...this.headers() },
+        body: hasBody ? (typeof options.body === 'string' ? options.body : JSON.stringify(options.body)) : undefined,
+      });
+    },
   };
 
   from<T = any>(table: string) {

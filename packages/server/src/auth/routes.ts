@@ -1,38 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
 import { query } from '../db.js';
-import { signAccessToken, newRefreshToken } from './jwt.js';
 import { resolveAuth } from './middleware.js';
-import { config } from '../config.js';
-
-interface UserRow {
-  id: string;
-  email: string;
-  password_hash: string;
-  role: string;
-  metadata: Record<string, unknown>;
-  created_at: string;
-}
-
-function publicUser(u: UserRow) {
-  return { id: u.id, email: u.email, role: u.role, metadata: u.metadata, created_at: u.created_at };
-}
-
-async function issueSession(user: UserRow) {
-  const access_token = signAccessToken({ sub: user.id, email: user.email, role: user.role });
-  const { token: refresh_token, expiresAt } = newRefreshToken();
-  await query(
-    `insert into auth.refresh_tokens (token, user_id, expires_at) values ($1, $2, $3)`,
-    [refresh_token, user.id, expiresAt],
-  );
-  return {
-    access_token,
-    refresh_token,
-    token_type: 'bearer',
-    expires_in: config.jwtAccessTtl,
-    user: publicUser(user),
-  };
-}
+import { issueSession, publicUser, type UserRow } from './session.js';
 
 export async function authRoutes(app: FastifyInstance) {
   // POST /auth/v1/signup  { email, password, metadata? }
@@ -64,7 +34,7 @@ export async function authRoutes(app: FastifyInstance) {
       if (!email || !password) return reply.code(400).send({ error: 'email and password required' });
       const { rows } = await query<UserRow>(`select * from auth.users where email = $1`, [email]);
       const user = rows[0];
-      if (!user || !(await bcrypt.compare(String(password), user.password_hash)))
+      if (!user || !user.password_hash || !(await bcrypt.compare(String(password), user.password_hash)))
         return reply.code(400).send({ error: 'invalid login credentials' });
       return reply.send(await issueSession(user));
     }

@@ -24,6 +24,9 @@ export const config = {
 
   storagePath: process.env.STORAGE_PATH ?? './storage-data',
 
+  functionsPath: process.env.FUNCTIONS_PATH ?? './functions',
+  functionTimeoutMs: num(process.env.FUNCTION_TIMEOUT_MS, 10000),
+
   studioEnabled: (process.env.STUDIO_ENABLED ?? 'true') !== 'false',
 };
 

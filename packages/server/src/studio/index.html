@@ -62,8 +62,10 @@
       <button data-view="tables" class="active">📋 Table Editor</button>
       <button data-view="sql">🧮 SQL Editor</button>
       <button data-view="auth">👤 Authentication</button>
+      <button data-view="policies">🛡️ Policies (RLS)</button>
       <button data-view="storage">📦 Storage</button>
       <button data-view="realtime">📡 Realtime</button>
+      <button data-view="functions">⚡ Edge Functions</button>
       <button data-view="api">🔌 API Docs</button>
     </nav>
     <main id="main"></main>
@@ -138,7 +140,16 @@
         <div class="card"><h3 style="margin-top:0">Create a test user</h3>
         <div class="row"><input id="em" placeholder="email"/><input id="pw" placeholder="password" type="password"/>
         <button class="btn" id="signup">Sign up</button></div><div id="signupOut" class="muted"></div></div>
+        <div class="card"><h3 style="margin-top:0">Passwordless magic link</h3>
+        <div class="row"><input id="mlEmail" placeholder="email"/><button class="btn secondary" id="magic">Generate link</button></div>
+        <div id="mlOut" class="muted" style="margin-top:8px;word-break:break-all"></div></div>
         <h3>Users</h3><div id="users"></div>`;
+      $('#magic', main).onclick = async () => {
+        try {
+          const r = await api('/auth/v1/magiclink', { method: 'POST', headers: headers(), body: JSON.stringify({ email: $('#mlEmail', main).value }) });
+          $('#mlOut', main).innerHTML = `Action link (would be emailed): <a href="${h(r.action_link)}" target="_blank">${h(r.action_link)}</a>`;
+        } catch (e) { $('#mlOut', main).textContent = e.message; }
+      };
       $('#saveKey', main).onclick = () => {
         SERVICE_KEY = $('#svc', main).value.trim();
         localStorage.setItem('kobedb_service_key', SERVICE_KEY); loadUsers();
@@ -214,6 +225,75 @@
         ws.onopen = () => { ws.send(JSON.stringify({ action: 'subscribe', table: $('#rtTable', main).value })); log('connected & subscribed'); };
         ws.onmessage = (e) => log(e.data);
         ws.onclose = () => log('disconnected');
+      };
+    };
+
+    views.policies = async (main) => {
+      main.innerHTML = `<h2>Row-Level Security</h2>
+        <p class="muted">Tables listed here enforce policies. Requires the service role key (set it under Authentication).</p>
+        <div class="card"><h3 style="margin-top:0">Enable RLS on a table</h3>
+        <div class="row"><input id="rlsTable" placeholder="table name"/>
+        <label><input type="checkbox" id="rlsEnabled" checked/> enabled</label>
+        <button class="btn" id="rlsSave">Save</button></div></div>
+        <div class="card"><h3 style="margin-top:0">Add policy</h3>
+        <div class="row"><input id="pTable" placeholder="table"/>
+        <select id="pAction"><option>select</option><option>insert</option><option>update</option><option>delete</option></select>
+        <input id="pRoles" placeholder="roles (comma) e.g. authenticated" value="authenticated"/>
+        <input id="pOwner" placeholder="owner_column (optional)"/>
+        <button class="btn" id="pSave">Add</button></div><div id="pOut" class="muted"></div></div>
+        <h3>Current configuration</h3><div id="polData"></div>`;
+      const load = async () => {
+        try {
+          const d = await api('/admin/policies', { headers: headers() });
+          $('#polData', main).innerHTML =
+            `<h4>RLS-enabled tables</h4><table><thead><tr><th>table</th><th>enabled</th></tr></thead><tbody>${d.rls.map(r => `<tr><td>${h(r.table_name)}</td><td>${r.enabled}</td></tr>`).join('')}</tbody></table>
+             <h4>Policies</h4><table><thead><tr><th>id</th><th>table</th><th>action</th><th>roles</th><th>owner_column</th><th></th></tr></thead><tbody>${d.policies.map(p => `<tr><td>${p.id}</td><td>${h(p.table_name)}</td><td><span class="pill">${h(p.action)}</span></td><td>${h((p.roles||[]).join(','))}</td><td>${h(p.owner_column||'')}</td><td><button class="btn danger" data-del="${p.id}">del</button></td></tr>`).join('')}</tbody></table>`;
+          main.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+            await api('/admin/policies/' + b.dataset.del, { method: 'DELETE', headers: headers() }); load();
+          });
+        } catch (e) { $('#polData', main).innerHTML = `<p class="muted">${h(e.message)}</p>`; }
+      };
+      $('#rlsSave', main).onclick = async () => {
+        await api('/admin/rls', { method: 'POST', headers: headers(), body: JSON.stringify({ table: $('#rlsTable', main).value, enabled: $('#rlsEnabled', main).checked }) }); load();
+      };
+      $('#pSave', main).onclick = async () => {
+        try {
+          await api('/admin/policies', { method: 'POST', headers: headers(), body: JSON.stringify({
+            table: $('#pTable', main).value, action: $('#pAction', main).value,
+            roles: $('#pRoles', main).value.split(',').map(s => s.trim()).filter(Boolean),
+            owner_column: $('#pOwner', main).value || null }) });
+          $('#pOut', main).textContent = 'Added ✓'; load();
+        } catch (e) { $('#pOut', main).textContent = e.message; }
+      };
+      load();
+    };
+
+    views.functions = async (main) => {
+      main.innerHTML = `<h2>Edge Functions</h2>
+        <p class="muted">Functions live in <code>functions/&lt;name&gt;/index.mjs</code> and run in an isolated worker (Deno-compatible <code>Request</code>/<code>Response</code> contract).</p>
+        <h3>Deployed functions</h3><div id="fnList"></div>
+        <div class="card"><h3 style="margin-top:0">Invoke</h3>
+        <div class="row"><input id="fnName" placeholder="function name" value="hello"/>
+        <select id="fnMethod"><option>POST</option><option>GET</option></select>
+        <button class="btn" id="fnRun">Run</button></div>
+        <label class="small" style="margin-top:10px">Request body (JSON, for POST)</label>
+        <textarea id="fnBody">{"name":"Kobe"}</textarea>
+        <div id="fnOut"></div></div>`;
+      try {
+        const d = await api('/functions/v1', { headers: headers(false) });
+        $('#fnList', main).innerHTML = d.functions.length
+          ? `<table><thead><tr><th>name</th><th>endpoint</th></tr></thead><tbody>${d.functions.map(f => `<tr><td>${h(f)}</td><td><code>/functions/v1/${h(f)}</code></td></tr>`).join('')}</tbody></table>`
+          : '<p class="muted">No functions found.</p>';
+      } catch (e) { $('#fnList', main).innerHTML = `<p class="muted">${h(e.message)}</p>`; }
+      $('#fnRun', main).onclick = async () => {
+        const method = $('#fnMethod', main).value;
+        const opts = { method, headers: headers() };
+        if (method === 'POST') opts.body = $('#fnBody', main).value;
+        try {
+          const res = await fetch(`${API}/functions/v1/${$('#fnName', main).value}`, opts);
+          const text = await res.text();
+          $('#fnOut', main).innerHTML = `<pre>${h(text)}</pre>`;
+        } catch (e) { $('#fnOut', main).innerHTML = `<pre style="color:var(--danger)">${h(e.message)}</pre>`; }
       };
     };
 

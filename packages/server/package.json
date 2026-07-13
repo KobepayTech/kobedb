@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/studio','dist/studio',{recursive:true})\"",
+    "build": "tsc -p tsconfig.json && node -e \"const f=require('fs');f.cpSync('src/studio','dist/studio',{recursive:true});f.copyFileSync('src/functions/worker.mjs','dist/functions/worker.mjs')\"",
     "start": "node dist/index.js"
   },
   "dependencies": {
