@@ -1,8 +1,8 @@
-# ⚡ KobeDB
+# ⚡ KobeDB + 🚀 KobeDeploy
 
-A self-hostable, open-source backend platform — your own **Supabase-style stack**, built from scratch in TypeScript on top of PostgreSQL.
+A self-hostable, open-source **app platform ecosystem** built from scratch in TypeScript on PostgreSQL — a **Supabase-style backend** (KobeDB) *and* a **Coolify-style deploy platform** (KobeDeploy) in one stack. Build your backend and host your apps, all from one server and one dashboard.
 
-It bundles the pieces you need to ship an app without writing a backend:
+It bundles everything you need to ship and run an app without gluing together a dozen services:
 
 | Pillar | What you get | Endpoint |
 | --- | --- | --- |
@@ -14,10 +14,19 @@ It bundles the pieces you need to ship an app without writing a backend:
 | **Storage** | S3-style buckets & objects with a pluggable backend: local filesystem **or** any S3-compatible service (AWS S3, MinIO, Cloudflare R2). | `/storage/v1` |
 | **Edge Functions** | Serverless functions using the Web-standard `Request`/`Response` contract, run in a **native Deno isolate** when available (OS-enforced permissions) or portable Node worker threads. | `/functions/v1` |
 | **Schema designer** | Service-role DDL API + Studio UI to create/alter/drop tables and run arbitrary SQL migrations. | `/admin/schema`, `/admin/sql` |
-| **Studio** | A zero-build web dashboard: table editor, schema designer, SQL runner, auth manager, RLS policies, storage browser, live realtime log, functions runner, API docs. | `/studio` |
+| 🚀 **Deploy (KobeDeploy)** | A Coolify-style app platform: deploy apps from a **Docker image or git repo**, manage env vars, provision a **database per project**, and route **domains** through a built-in reverse proxy. | `/deploy/v1` |
+| **Studio** | A zero-build web dashboard for all of the above: tables, schema, SQL, auth, RLS, storage, realtime, functions, backups, **and app deployments**. | `/studio` |
 | **Client SDK** | A `supabase-js`-style TypeScript client. | `@kobedb/client` |
 
-> Built because cloning `supabase/supabase` was blocked by network policy — so this is a clean-room implementation of the same ideas.
+> Built because cloning `supabase/supabase` (and later `coollabsio/coolify`) was blocked by network policy — so this is a clean-room implementation of both ideas, fused into one ecosystem.
+
+## The ecosystem
+
+KobeDB is the **data/backend plane**; KobeDeploy is the **compute/hosting plane** — and they share one Postgres, one auth system, and one Studio dashboard:
+
+- Spin up a **project**, provision it a dedicated **database** (`POST /deploy/v1/projects/:id/database`), and your deployed apps get a ready-to-use Postgres.
+- Deploy the app itself from an image or git repo; point a **domain** at it and the built-in proxy routes traffic to the running container.
+- The app talks to KobeDB for auth, REST, storage, realtime and functions — no external BaaS required.
 
 ## Architecture
 
@@ -191,6 +200,39 @@ curl -X POST http://localhost:8000/admin/sql -H "Authorization: Bearer $SERVICE_
 Column types are whitelisted and identifiers validated; the REST API and RLS engine pick
 up new tables immediately.
 
+## 🚀 Deploying apps (KobeDeploy)
+
+Deploy and run applications on your own server, Coolify-style. Everything is service-role gated.
+
+```bash
+# 1. Create a project and (optionally) provision it a dedicated database
+curl -X POST http://localhost:8000/deploy/v1/projects -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
+  -H 'Content-Type: application/json' -d '{"name":"shop"}'
+curl -X POST http://localhost:8000/deploy/v1/projects/<project_id>/database -H "Authorization: Bearer $SERVICE_ROLE_KEY"
+#   → { "database": "app_shop", "connection_url": "postgres://…/app_shop" }
+
+# 2. Create an app — from a Docker image…
+curl -X POST http://localhost:8000/deploy/v1/apps -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"project_id":"<id>","name":"web","source_type":"image","source":"nginx:alpine","container_port":80,"domain":"shop.example.com","env":{"NODE_ENV":"production"}}'
+#   …or from a git repo (built via its Dockerfile):
+#   {"source_type":"git","source":"https://github.com/you/app","git_ref":"main","dockerfile":"Dockerfile"}
+
+# 3. Deploy it (builds + runs a container, publishes it on a host port)
+curl -X POST http://localhost:8000/deploy/v1/apps/<app_id>/deploy -H "Authorization: Bearer $SERVICE_ROLE_KEY"
+
+# 4. Traffic to the app's domain is routed by the built-in proxy (port 8090 by default)
+curl http://localhost:8090/ -H "Host: shop.example.com"
+
+# Manage: stop / restart / logs / deployment history
+curl -X POST http://localhost:8000/deploy/v1/apps/<app_id>/stop    -H "Authorization: Bearer $SERVICE_ROLE_KEY"
+curl      http://localhost:8000/deploy/v1/apps/<app_id>/logs        -H "Authorization: Bearer $SERVICE_ROLE_KEY"
+```
+
+**Runtime:** with the `docker` binary available, apps run as real containers (image pull or `git clone` + `docker build`). Without Docker, a **mock runtime** runs lightweight in-process HTTP servers so the full flow (deploy → proxy → logs) works for development and CI. Force it with `DEPLOY_RUNTIME=docker|mock` (default `auto`). Configure the proxy with `DEPLOY_PROXY_PORT` / `DEPLOY_PROXY_ENABLED`.
+
+Manage all of this visually in the **Deploy** tab of Studio.
+
 ## Backups & restore
 
 KobeDB backs up with PostgreSQL's own tools (`pg_dump` custom format, restored via
@@ -270,6 +312,7 @@ kobedb/
 │   │       ├── storage/       # buckets & objects (local + S3 drivers)
 │   │       ├── realtime/      # LISTEN/NOTIFY → WebSocket fan-out
 │   │       ├── functions/     # edge functions (Deno isolate + worker fallback)
+│   │       ├── deploy/        # KobeDeploy: container runtime, orchestrator, proxy
 │   │       └── studio/        # zero-build dashboard (static HTML/JS)
 │   └── client/                # @kobedb/client TypeScript SDK
 └── .env.example
@@ -291,6 +334,9 @@ kobedb/
 - ✅ Email provider integration for magic links (log / SMTP / Resend)
 - ✅ Database backups & restore (`pg_dump` / `pg_restore`)
 - ✅ Per-column RLS
+- ✅ KobeDeploy — Coolify-style app platform (image/git deploys, domains, proxy, per-project DB)
+- Automatic TLS for deploy domains (ACME/Let's Encrypt)
+- Zero-downtime deploys & health checks
 - Point-in-time restore (WAL archiving)
 - Richer policy expressions (arbitrary SQL predicates)
 

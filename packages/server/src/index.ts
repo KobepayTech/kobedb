@@ -13,6 +13,8 @@ import { policyAdminRoutes } from './rest/admin.js';
 import { storageRoutes } from './storage/routes.js';
 import { realtimePlugin } from './realtime/index.js';
 import { functionRoutes } from './functions/routes.js';
+import { deployRoutes } from './deploy/routes.js';
+import { startDeployProxy } from './deploy/proxy.js';
 
 const app = Fastify({
   logger: { level: process.env.LOG_LEVEL ?? 'info' },
@@ -49,6 +51,7 @@ async function main() {
       storage: '/storage/v1',
       realtime: 'ws://<host>/realtime/v1',
       functions: '/functions/v1',
+      deploy: '/deploy/v1',
       studio: config.studioEnabled ? '/studio' : null,
       health: '/health',
     },
@@ -61,6 +64,7 @@ async function main() {
   await app.register(storageRoutes);
   await app.register(realtimePlugin);
   await app.register(functionRoutes);
+  await app.register(deployRoutes);
 
   // Studio dashboard (static, zero-build).
   if (config.studioEnabled) {
@@ -75,6 +79,8 @@ async function main() {
 
   await app.listen({ port: config.port, host: config.host });
   app.log.info(`KobeDB ready at ${config.publicUrl}`);
+
+  if (config.deployProxyEnabled) startDeployProxy(app.log);
 }
 
 main().catch((err) => {
