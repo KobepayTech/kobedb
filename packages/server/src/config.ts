@@ -24,8 +24,20 @@ export const config = {
 
   storagePath: process.env.STORAGE_PATH ?? './storage-data',
 
+  // Storage backend: 'local' (filesystem) or 's3' (S3-compatible).
+  storageBackend: (process.env.STORAGE_BACKEND ?? 'local') as 'local' | 's3',
+  s3Bucket: process.env.S3_BUCKET ?? '',
+  s3Region: process.env.S3_REGION ?? 'us-east-1',
+  s3Endpoint: process.env.S3_ENDPOINT ?? '',
+  s3AccessKeyId: process.env.S3_ACCESS_KEY_ID ?? '',
+  s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? '',
+  s3Prefix: process.env.S3_PREFIX ?? '',
+  s3ForcePathStyle: (process.env.S3_FORCE_PATH_STYLE ?? 'true') !== 'false',
+
   functionsPath: process.env.FUNCTIONS_PATH ?? './functions',
   functionTimeoutMs: num(process.env.FUNCTION_TIMEOUT_MS, 10000),
+  // 'auto' uses Deno if the binary is present, else worker threads. Force with 'deno' | 'worker'.
+  functionsRuntime: (process.env.FUNCTIONS_RUNTIME ?? 'auto') as 'auto' | 'deno' | 'worker',
 
   studioEnabled: (process.env.STUDIO_ENABLED ?? 'true') !== 'false',
 };

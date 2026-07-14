@@ -1,23 +1,13 @@
 import type { FastifyInstance } from 'fastify';
-import fs from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
-import path from 'node:path';
 import { query } from '../db.js';
 import { resolveAuth } from '../auth/middleware.js';
-import { config } from '../config.js';
+import { storageDriver } from './driver.js';
 
-// Resolve the on-disk path for an object, guarding against path traversal.
-function objectPath(bucket: string, name: string): string {
-  const safeName = name.replace(/\\/g, '/').replace(/\.\.(\/|$)/g, '');
-  const full = path.resolve(config.storagePath, bucket, safeName);
-  const root = path.resolve(config.storagePath, bucket);
-  if (!full.startsWith(root)) {
-    throw Object.assign(new Error('invalid object path'), { statusCode: 400 });
-  }
-  return full;
-}
-
+// Object metadata lives in Postgres (storage.objects/buckets); raw bytes are handled
+// by the configured driver (local filesystem or S3-compatible).
 export async function storageRoutes(app: FastifyInstance) {
+  const store = storageDriver();
+
   // ── Buckets ──────────────────────────────────────────────────────────────
   app.get('/storage/v1/bucket', async () => {
     const { rows } = await query(`select * from storage.buckets order by created_at`);
@@ -34,7 +24,7 @@ export async function storageRoutes(app: FastifyInstance) {
        on conflict (id) do update set public = excluded.public`,
       [id, !!isPublic],
     );
-    await fs.mkdir(path.resolve(config.storagePath, id), { recursive: true });
+    await store.ensureBucket(id);
     return reply.code(201).send({ id, public: !!isPublic });
   });
 
@@ -43,12 +33,11 @@ export async function storageRoutes(app: FastifyInstance) {
     if (ctx.role !== 'service_role') return reply.code(403).send({ error: 'service role required' });
     const { bucket } = req.params as any;
     await query(`delete from storage.buckets where id = $1`, [bucket]);
-    await fs.rm(path.resolve(config.storagePath, bucket), { recursive: true, force: true });
+    await store.removeBucket(bucket);
     return reply.code(204).send();
   });
 
   // ── Objects ──────────────────────────────────────────────────────────────
-  // List objects in a bucket
   app.get('/storage/v1/object/list/:bucket', async (req, reply) => {
     const { bucket } = req.params as any;
     const { rows } = await query(
@@ -69,11 +58,9 @@ export async function storageRoutes(app: FastifyInstance) {
     const b = await query(`select 1 from storage.buckets where id = $1`, [bucket]);
     if (!b.rowCount) return reply.code(404).send({ error: 'bucket not found' });
 
-    const dest = objectPath(bucket, name);
-    await fs.mkdir(path.dirname(dest), { recursive: true });
     const buf = req.body as Buffer;
-    await fs.writeFile(dest, buf);
     const mime = (req.headers['content-type'] as string) ?? 'application/octet-stream';
+    await store.put(bucket, name, buf, mime);
 
     await query(
       `insert into storage.objects (bucket_id, name, size, mime_type, owner)
@@ -104,14 +91,13 @@ export async function storageRoutes(app: FastifyInstance) {
       if (ctx.role === 'anon') return reply.code(401).send({ error: 'authentication required' });
     }
 
-    const filePath = objectPath(bucket, name);
     try {
-      await fs.access(filePath);
-    } catch {
-      return reply.code(404).send({ error: 'object data missing' });
+      const body = await store.get(bucket, name);
+      reply.header('content-type', obj.mime_type ?? 'application/octet-stream');
+      return reply.send(body);
+    } catch (e: any) {
+      return reply.code(e?.statusCode ?? 404).send({ error: e?.message ?? 'object data missing' });
     }
-    reply.header('content-type', obj.mime_type ?? 'application/octet-stream');
-    return reply.send(createReadStream(filePath));
   });
 
   // Delete
@@ -121,7 +107,7 @@ export async function storageRoutes(app: FastifyInstance) {
     const { bucket } = req.params as any;
     const name = (req.params as any)['*'];
     await query(`delete from storage.objects where bucket_id = $1 and name = $2`, [bucket, name]);
-    await fs.rm(objectPath(bucket, name), { force: true });
+    await store.delete(bucket, name);
     return reply.code(204).send();
   });
 }

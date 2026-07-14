@@ -10,9 +10,10 @@ It bundles the pieces you need to ship an app without writing a backend:
 | **Auth** | Email/password signup & login, JWT access tokens, rotating refresh tokens, **passwordless magic links**, **OAuth (Google/GitHub)**, service-role key, admin user listing. | `/auth/v1` |
 | **Row-Level Security** | A policy engine: per-table read/write rules by role, with owner-scoping so users only touch their own rows. Manageable via API/Studio. | `/admin/*` |
 | **Realtime** | WebSocket subscriptions to row changes (INSERT/UPDATE/DELETE) via Postgres `LISTEN/NOTIFY`. | `ws://…/realtime/v1` |
-| **Storage** | S3-style buckets & objects backed by the local filesystem, public/private access rules. | `/storage/v1` |
-| **Edge Functions** | Serverless functions run in isolated worker threads using the Web-standard `Request`/`Response` contract (Deno-compatible). | `/functions/v1` |
-| **Studio** | A zero-build web dashboard: table editor, query runner, auth manager, RLS policies, storage browser, live realtime log, functions runner, API docs. | `/studio` |
+| **Storage** | S3-style buckets & objects with a pluggable backend: local filesystem **or** any S3-compatible service (AWS S3, MinIO, Cloudflare R2). | `/storage/v1` |
+| **Edge Functions** | Serverless functions using the Web-standard `Request`/`Response` contract, run in a **native Deno isolate** when available (OS-enforced permissions) or portable Node worker threads. | `/functions/v1` |
+| **Schema designer** | Service-role DDL API + Studio UI to create/alter/drop tables and run arbitrary SQL migrations. | `/admin/schema`, `/admin/sql` |
+| **Studio** | A zero-build web dashboard: table editor, schema designer, SQL runner, auth manager, RLS policies, storage browser, live realtime log, functions runner, API docs. | `/studio` |
 | **Client SDK** | A `supabase-js`-style TypeScript client. | `@kobedb/client` |
 
 > Built because cloning `supabase/supabase` was blocked by network policy — so this is a clean-room implementation of the same ideas.
@@ -131,9 +132,50 @@ export default async (request) => {
 };
 ```
 
-Invoke it at `POST /functions/v1/<name>`. Each call runs in an isolated worker thread
-with a timeout. The `Request`/`Response` contract is identical under Deno, so the same
-file runs with `deno serve` unmodified.
+Invoke it at `POST /functions/v1/<name>`. Each call runs isolated with a timeout.
+If the `deno` binary is installed, KobeDB runs the function in a **Deno isolate** with
+OS-enforced permissions (`--allow-net`, scoped `--allow-read`); otherwise it falls back
+to a Node **worker thread**. Force a runtime with `FUNCTIONS_RUNTIME=deno|worker` (default `auto`).
+
+## Schema designer & migrations
+
+Manage your database structure over the service-role API (or the **Schema Designer** and
+**SQL Editor** tabs in Studio):
+
+```bash
+# Create a table (an identity `id` PK is added automatically if you don't declare one)
+curl -X POST http://localhost:8000/admin/schema/tables -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"notes","columns":[{"name":"body","type":"text","nullable":false},{"name":"pinned","type":"boolean","default":"false"}]}'
+
+# Add a column
+curl -X POST http://localhost:8000/admin/schema/tables/notes/columns -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
+  -H 'Content-Type: application/json' -d '{"name":"color","type":"text"}'
+
+# Introspect the schema, or run any SQL migration
+curl http://localhost:8000/admin/schema -H "Authorization: Bearer $SERVICE_ROLE_KEY"
+curl -X POST http://localhost:8000/admin/sql -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
+  -H 'Content-Type: application/json' -d '{"query":"create index on public.notes (pinned)"}'
+```
+
+Column types are whitelisted and identifiers validated; the REST API and RLS engine pick
+up new tables immediately.
+
+## S3 / object storage backends
+
+Storage defaults to the local filesystem. To use any S3-compatible service, set:
+
+```bash
+STORAGE_BACKEND=s3
+S3_BUCKET=my-bucket
+S3_REGION=us-east-1
+S3_ENDPOINT=            # e.g. https://<account>.r2.cloudflarestorage.com for R2 / MinIO URL
+S3_ACCESS_KEY_ID=...
+S3_SECRET_ACCESS_KEY=...
+```
+
+Object metadata always lives in Postgres; only the raw bytes move to S3. The `@aws-sdk/client-s3`
+package is an optional dependency, loaded lazily only when `STORAGE_BACKEND=s3`.
 
 ## Using the client SDK
 
@@ -175,10 +217,10 @@ kobedb/
 │   ├── server/                # Fastify API
 │   │   └── src/
 │   │       ├── auth/          # password, magic link, OAuth, JWT sessions
-│   │       ├── rest/          # auto REST + RLS policy engine + admin API
-│   │       ├── storage/       # buckets & objects
+│   │       ├── rest/          # auto REST + RLS policy engine + schema/DDL admin API
+│   │       ├── storage/       # buckets & objects (local + S3 drivers)
 │   │       ├── realtime/      # LISTEN/NOTIFY → WebSocket fan-out
-│   │       ├── functions/     # edge-function worker runtime
+│   │       ├── functions/     # edge functions (Deno isolate + worker fallback)
 │   │       └── studio/        # zero-build dashboard (static HTML/JS)
 │   └── client/                # @kobedb/client TypeScript SDK
 └── .env.example
@@ -194,11 +236,12 @@ kobedb/
 
 - ✅ Per-table / per-row access policies (RLS-style rules engine)
 - ✅ OAuth providers & magic links
-- ✅ Edge functions runtime (Deno-compatible)
-- Native Deno isolate execution for functions (currently worker threads)
-- S3-compatible storage backend option
-- Studio: schema designer & migrations
+- ✅ Edge functions runtime (Deno isolate + worker-thread fallback)
+- ✅ S3-compatible storage backend option
+- ✅ Studio: schema designer & SQL migrations
 - Email provider integration for magic links
+- Database backups & point-in-time restore
+- Per-column RLS and richer policy expressions
 
 ## License
 

@@ -60,6 +60,7 @@
   <div class="layout">
     <nav>
       <button data-view="tables" class="active">📋 Table Editor</button>
+      <button data-view="schema">🏗️ Schema Designer</button>
       <button data-view="sql">🧮 SQL Editor</button>
       <button data-view="auth">👤 Authentication</button>
       <button data-view="policies">🛡️ Policies (RLS)</button>
@@ -117,19 +118,79 @@
 
     views.sql = async (main) => {
       main.innerHTML = `<h2>SQL Editor</h2>
-        <div class="card"><label class="small">Run read queries against the REST API. For write SQL, use psql.
-        This panel runs a SELECT-style query via a table endpoint helper.</label>
-        <p class="muted">Tip: pick a table + filter using PostgREST syntax, e.g.
-        <code>todos?done=is.false&order=created_at.desc&limit=5</code></p>
-        <div class="row"><input id="q" style="flex:1" placeholder="todos?select=id,title&limit=10" />
-        <button class="btn" id="run">Run</button></div></div>
+        <div class="card"><label class="small">Run arbitrary SQL against your database (requires the service role key, set under Authentication). Results render below.</label>
+        <textarea id="sql">select * from public.todos limit 10;</textarea>
+        <div class="row" style="margin-top:8px"><button class="btn" id="run">Run</button>
+        <span class="muted" id="sqlMeta"></span></div></div>
         <div id="out"></div>`;
       $('#run', main).onclick = async () => {
         try {
-          const data = await api('/rest/v1/' + $('#q', main).value, { headers: headers(false) });
-          $('#out', main).innerHTML = `<pre>${h(JSON.stringify(data, null, 2))}</pre>`;
+          const r = await api('/admin/sql', { method: 'POST', headers: headers(), body: JSON.stringify({ query: $('#sql', main).value }) });
+          $('#sqlMeta', main).textContent = `${r.command || ''} · ${r.rowCount ?? 0} row(s)`;
+          if (r.rows && r.rows.length) {
+            const cols = r.fields && r.fields.length ? r.fields : Object.keys(r.rows[0]);
+            $('#out', main).innerHTML = `<table><thead><tr>${cols.map(c => `<th>${h(c)}</th>`).join('')}</tr></thead><tbody>${r.rows.map(row => `<tr>${cols.map(c => `<td>${h(typeof row[c] === 'object' ? JSON.stringify(row[c]) : row[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+          } else {
+            $('#out', main).innerHTML = `<pre>${h(JSON.stringify(r, null, 2))}</pre>`;
+          }
         } catch (e) { $('#out', main).innerHTML = `<pre style="color:var(--danger)">${h(e.message)}</pre>`; }
       };
+    };
+
+    views.schema = async (main) => {
+      main.innerHTML = `<h2>Schema Designer</h2>
+        <p class="muted">Create and alter tables (requires the service role key). New tables get an auto <code>id</code> primary key unless you mark one.</p>
+        <div class="card"><h3 style="margin-top:0">Create table</h3>
+        <div class="row"><input id="tName" placeholder="table name"/></div>
+        <div id="colRows" style="margin-top:10px"></div>
+        <button class="btn secondary" id="addCol" style="margin-top:8px">+ Add column</button>
+        <div style="margin-top:10px"><button class="btn" id="createTbl">Create table</button> <span class="muted" id="ctOut"></span></div></div>
+        <h3>Existing schema</h3><div id="schemaData"></div>`;
+      const TYPES = ['text','int','bigint','boolean','uuid','jsonb','timestamptz','date','numeric','serial'];
+      const colRows = $('#colRows', main);
+      const addCol = (name = '', type = 'text') => {
+        const div = document.createElement('div');
+        div.className = 'row'; div.style.marginBottom = '6px';
+        div.innerHTML = `<input class="cName" placeholder="column" value="${h(name)}" style="width:160px"/>
+          <select class="cType">${TYPES.map(t => `<option${t===type?' selected':''}>${t}</option>`).join('')}</select>
+          <label class="small"><input type="checkbox" class="cNull" checked/> nullable</label>
+          <label class="small"><input type="checkbox" class="cPk"/> primary key</label>
+          <input class="cDef" placeholder="default (optional)" style="width:150px"/>
+          <button class="btn danger cDel">×</button>`;
+        div.querySelector('.cDel').onclick = () => div.remove();
+        colRows.appendChild(div);
+      };
+      addCol('title', 'text');
+      $('#addCol', main).onclick = () => addCol();
+      $('#createTbl', main).onclick = async () => {
+        const columns = [...colRows.querySelectorAll('.row')].map(r => ({
+          name: r.querySelector('.cName').value.trim(),
+          type: r.querySelector('.cType').value,
+          nullable: r.querySelector('.cNull').checked,
+          primaryKey: r.querySelector('.cPk').checked,
+          default: r.querySelector('.cDef').value.trim() || undefined,
+        })).filter(c => c.name);
+        try {
+          await api('/admin/schema/tables', { method: 'POST', headers: headers(), body: JSON.stringify({ name: $('#tName', main).value.trim(), columns }) });
+          $('#ctOut', main).textContent = 'Created ✓'; load();
+        } catch (e) { $('#ctOut', main).textContent = e.message; }
+      };
+      async function load() {
+        try {
+          const d = await api('/admin/schema', { headers: headers() });
+          $('#schemaData', main).innerHTML = Object.entries(d.tables).map(([t, cols]) =>
+            `<div class="card"><div class="row"><h3 style="margin:0;flex:1">${h(t)}</h3>
+             <button class="btn danger" data-drop="${h(t)}">Drop table</button></div>
+             <table><thead><tr><th>column</th><th>type</th><th>nullable</th><th>default</th><th>pk</th></tr></thead>
+             <tbody>${cols.map(c => `<tr><td>${h(c.name)}</td><td>${h(c.type)}</td><td>${c.nullable}</td><td>${h(c.default||'')}</td><td>${c.primaryKey?'🔑':''}</td></tr>`).join('')}</tbody></table></div>`
+          ).join('');
+          main.querySelectorAll('[data-drop]').forEach(b => b.onclick = async () => {
+            if (!confirm('Drop table ' + b.dataset.drop + '?')) return;
+            await api('/admin/schema/tables/' + b.dataset.drop, { method: 'DELETE', headers: headers() }); load();
+          });
+        } catch (e) { $('#schemaData', main).innerHTML = `<p class="muted">${h(e.message)}</p>`; }
+      }
+      load();
     };
 
     views.auth = async (main) => {

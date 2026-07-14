@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import { query } from '../db.js';
+import { query, invalidateTableCache } from '../db.js';
 import { resolveAuth } from '../auth/middleware.js';
 import { invalidatePolicyCache } from './policy.js';
+import { registerSchemaRoutes } from './schema.js';
 
 // Admin API for the RLS policy engine. Service-role only.
 export async function policyAdminRoutes(app: FastifyInstance) {
@@ -55,4 +56,7 @@ export async function policyAdminRoutes(app: FastifyInstance) {
     invalidatePolicyCache();
     return reply.code(204).send();
   });
+
+  // Schema designer / migrations (DDL + SQL runner). Shares the /admin/ guard above.
+  registerSchemaRoutes(app, invalidateTableCache);
 }

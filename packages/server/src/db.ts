@@ -46,6 +46,11 @@ export async function getPublicTables(): Promise<Map<string, Set<string>>> {
   return map;
 }
 
+/** Force the table/column cache to refresh (call after DDL changes). */
+export function invalidateTableCache() {
+  tableCache = null;
+}
+
 export async function assertTable(table: string): Promise<Set<string>> {
   const tables = await getPublicTables();
   const cols = tables.get(table);

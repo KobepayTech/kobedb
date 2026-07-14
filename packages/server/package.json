@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json && node -e \"const f=require('fs');f.cpSync('src/studio','dist/studio',{recursive:true});f.copyFileSync('src/functions/worker.mjs','dist/functions/worker.mjs')\"",
+    "build": "tsc -p tsconfig.json && node -e \"const f=require('fs');f.cpSync('src/studio','dist/studio',{recursive:true});f.copyFileSync('src/functions/worker.mjs','dist/functions/worker.mjs');f.copyFileSync('src/functions/deno-runner.mjs','dist/functions/deno-runner.mjs')\"",
     "start": "node dist/index.js"
   },
   "dependencies": {
@@ -19,6 +19,9 @@
     "fastify": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.13.1"
+  },
+  "optionalDependencies": {
+    "@aws-sdk/client-s3": "^3.700.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

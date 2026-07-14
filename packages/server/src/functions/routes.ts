@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { config } from '../config.js';
-import { resolveFunction, invokeFunction, listFunctions, type InvokeRequest } from './runtime.js';
+import { resolveFunction, invokeFunction, listFunctions, activeRuntime, type InvokeRequest } from './runtime.js';
 
 // Normalise a Fastify request body (Buffer or parsed JSON) back to a raw string.
 function rawBody(body: unknown): string | undefined {
@@ -11,7 +11,7 @@ function rawBody(body: unknown): string | undefined {
 }
 
 export async function functionRoutes(app: FastifyInstance) {
-  app.get('/functions/v1', async () => ({ functions: listFunctions() }));
+  app.get('/functions/v1', async () => ({ functions: listFunctions(), runtime: activeRuntime() }));
 
   app.route({
     method: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
