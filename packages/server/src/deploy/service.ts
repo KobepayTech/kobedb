@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { query } from '../db.js';
 import { containerRuntime, allocatePort, type BuildSpec } from './runtime.js';
 
@@ -12,10 +13,43 @@ export interface App {
   container_port: number;
   env: Record<string, string>;
   domain: string | null;
+  volumes: { host: string; container: string }[];
+  health_check_path: string | null;
+  health_check_expected_status: number;
+  health_check_retries: number;
   status: string;
   host_port: number | null;
   container_id: string | null;
   image_tag: string | null;
+}
+
+// Poll an app's published port until the health-check path returns the expected
+// status (Coolify-style). Resolves true when healthy, false if retries exhaust.
+function httpStatus(port: number, path: string, timeoutMs = 2000): Promise<number> {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port, path, timeout: timeoutMs }, (res) => {
+      res.resume();
+      resolve(res.statusCode ?? 0);
+    });
+    req.on('error', () => resolve(0));
+    req.on('timeout', () => { req.destroy(); resolve(0); });
+  });
+}
+
+async function waitHealthy(app: App, hostPort: number, onLog: (l: string) => void): Promise<boolean> {
+  if (!app.health_check_path) return true; // no health check configured → assume healthy
+  const path = app.health_check_path.startsWith('/') ? app.health_check_path : `/${app.health_check_path}`;
+  const retries = Math.max(1, app.health_check_retries ?? 10);
+  for (let i = 1; i <= retries; i++) {
+    const code = await httpStatus(hostPort, path);
+    if (code === app.health_check_expected_status) {
+      onLog(`health check ${path} → ${code} (healthy)`);
+      return true;
+    }
+    onLog(`health check ${path} attempt ${i}/${retries} → ${code || 'no response'}`);
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
 }
 
 async function getApp(id: string): Promise<App> {
@@ -76,12 +110,16 @@ export async function deployApp(appId: string): Promise<string> {
         env: app.env ?? {},
         containerPort: app.container_port,
         hostPort,
+        volumes: app.volumes ?? [],
       });
 
-      await setApp(appId, { status: 'running', host_port: hostPort, container_id: containerId, image_tag: image });
+      // Health check before declaring the app running (Coolify-style gate).
+      const healthy = await waitHealthy(app, hostPort, onLog);
+      const finalStatus = healthy ? 'running' : 'unhealthy';
+      await setApp(appId, { status: finalStatus, host_port: hostPort, container_id: containerId, image_tag: image });
       await query(
-        `update deploy.deployments set status='running', image_tag=$2, logs=$3, finished_at=now() where id=$1`,
-        [deploymentId, image, logbuf + 'deployment succeeded\n'],
+        `update deploy.deployments set status=$4, image_tag=$2, logs=$3, finished_at=now() where id=$1`,
+        [deploymentId, image, logbuf + `deployment ${healthy ? 'succeeded' : 'unhealthy'}\n`, healthy ? 'running' : 'failed'],
       );
     } catch (err: any) {
       onLog(`ERROR: ${err.message}`);
@@ -123,7 +161,10 @@ export async function appLogs(appId: string): Promise<string> {
 export async function refreshStatus(app: App): Promise<string> {
   if (!app.container_id) return app.status;
   const s = await containerRuntime().status(app.container_id);
-  const mapped = s === 'running' ? 'running' : s === 'stopped' ? 'stopped' : app.status;
-  if (mapped !== app.status) await setApp(app.id, { status: mapped });
-  return mapped;
+  // A stopped container always wins; otherwise keep app-level states (unhealthy, etc.).
+  if (s === 'stopped' && app.status !== 'stopped') {
+    await setApp(app.id, { status: 'stopped' });
+    return 'stopped';
+  }
+  return app.status;
 }

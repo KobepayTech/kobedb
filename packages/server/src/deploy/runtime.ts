@@ -21,6 +21,7 @@ export interface RunSpec {
   env: Record<string, string>;
   containerPort: number;
   hostPort: number;
+  volumes?: { host: string; container: string }[];
 }
 
 export interface ContainerRuntime {
@@ -90,6 +91,9 @@ class DockerRuntime implements ContainerRuntime {
     const args = ['run', '-d', '--name', container, '-p', `${spec.hostPort}:${spec.containerPort}`];
     for (const [k, v] of Object.entries(spec.env)) {
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) args.push('-e', `${k}=${v}`);
+    }
+    for (const vol of spec.volumes ?? []) {
+      if (vol.host && vol.container) args.push('-v', `${vol.host}:${vol.container}`);
     }
     args.push(spec.image);
     const r = await sh('docker', args);

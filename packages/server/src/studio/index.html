@@ -409,6 +409,7 @@
         <input id="appSrc" placeholder="nginx:alpine  or  https://github.com/u/repo"/></div>
         <div class="row" style="margin-top:8px"><input id="appPort" type="number" value="8080" style="width:110px" title="container port"/>
         <input id="appDomain" placeholder="domain e.g. app.localhost"/>
+        <input id="appHealth" placeholder="health check path e.g. /health" style="width:170px"/>
         <input id="appEnv" placeholder='env JSON e.g. {"KEY":"val"}' style="flex:1"/>
         <button class="btn" id="mkApp">Create app</button></div><div id="appOut" class="muted"></div></div>
         <h3>Apps</h3><div id="appList"></div>
@@ -446,7 +447,8 @@
           await api('/deploy/v1/apps', { method:'POST', headers: headers(), body: JSON.stringify({
             project_id: $('#appProj', main).value, name: $('#appName', main).value,
             source_type: $('#appSrcType', main).value, source: $('#appSrc', main).value,
-            container_port: Number($('#appPort', main).value)||8080, domain: $('#appDomain', main).value || null, env }) });
+            container_port: Number($('#appPort', main).value)||8080, domain: $('#appDomain', main).value || null,
+            health_check_path: $('#appHealth', main).value || null, env }) });
           $('#appOut', main).textContent = 'App created ✓'; loadApps();
         } catch (e) { $('#appOut', main).textContent = e.message; }
       };

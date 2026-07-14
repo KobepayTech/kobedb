@@ -86,8 +86,9 @@ export async function deployRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'source_type must be image or git' });
     const { rows } = await query(
       `insert into deploy.apps
-         (project_id, name, source_type, source, git_ref, dockerfile, container_port, env, domain)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
+         (project_id, name, source_type, source, git_ref, dockerfile, container_port, env, domain,
+          volumes, health_check_path, health_check_expected_status, health_check_retries)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,
       [
         b.project_id,
         b.name,
@@ -98,6 +99,10 @@ export async function deployRoutes(app: FastifyInstance) {
         b.container_port ?? 8080,
         b.env ?? {},
         b.domain ?? null,
+        JSON.stringify(Array.isArray(b.volumes) ? b.volumes : []),
+        b.health_check_path ?? null,
+        b.health_check_expected_status ?? 200,
+        b.health_check_retries ?? 10,
       ],
     );
     return reply.code(201).send(rows[0]);
@@ -114,13 +119,15 @@ export async function deployRoutes(app: FastifyInstance) {
   app.patch('/deploy/v1/apps/:id', async (req, reply) => {
     const id = (req.params as any).id;
     const b = (req.body ?? {}) as any;
-    const allowed = ['env', 'domain', 'source', 'source_type', 'git_ref', 'dockerfile', 'container_port'];
+    const allowed = ['env', 'domain', 'source', 'source_type', 'git_ref', 'dockerfile', 'container_port',
+      'volumes', 'health_check_path', 'health_check_expected_status', 'health_check_retries'];
     const keys = Object.keys(b).filter((k) => allowed.includes(k));
     if (!keys.length) return reply.code(400).send({ error: 'no updatable fields' });
+    const jsonCols = new Set(['env', 'volumes']);
     const set = keys.map((k, i) => `${k} = $${i + 2}`).join(', ');
     const { rows } = await query(
       `update deploy.apps set ${set}, updated_at = now() where id = $1 returning *`,
-      [id, ...keys.map((k) => (k === 'env' ? b[k] : b[k]))],
+      [id, ...keys.map((k) => (jsonCols.has(k) ? JSON.stringify(b[k]) : b[k]))],
     );
     if (!rows.length) return reply.code(404).send({ error: 'app not found' });
     return rows[0];

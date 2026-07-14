@@ -24,9 +24,16 @@ create table if not exists deploy.apps (
   container_port integer not null default 8080,   -- port the app listens on inside the container
   env           jsonb not null default '{}'::jsonb,
   domain        text unique,                -- hostname routed to this app by the proxy
+  -- persistent volumes: array of { "host": "...", "container": "..." } (Coolify-style)
+  volumes       jsonb not null default '[]'::jsonb,
+  -- health check (Coolify-style): after start, poll this path until it returns the
+  -- expected status before marking the app healthy/running.
+  health_check_path            text,
+  health_check_expected_status integer not null default 200,
+  health_check_retries         integer not null default 10,
   -- runtime state
   status        text not null default 'created'
-                  check (status in ('created','building','running','stopped','failed')),
+                  check (status in ('created','building','running','unhealthy','stopped','failed')),
   host_port     integer,                    -- published host port the proxy forwards to
   container_id  text,
   image_tag     text,
