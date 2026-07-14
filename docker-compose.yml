@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:16
+    container_name: kobedb-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kobedb
+      POSTGRES_PASSWORD: kobedb
+      POSTGRES_DB: kobedb
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kobedb -d kobedb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: packages/server/Dockerfile
+    container_name: kobedb-server
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://kobedb:kobedb@db:5432/kobedb
+      PORT: "8000"
+      HOST: 0.0.0.0
+      PUBLIC_URL: http://localhost:8000
+      JWT_SECRET: super-secret-change-me-please-32-chars-min
+      SERVICE_ROLE_KEY: service-role-change-me
+      STORAGE_PATH: /data/storage
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage-data:/data/storage
+    # Comment the build block and uncomment below to run without building an image:
+    # profiles: ["full"]

@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KobeDB Studio</title>
+  <style>
+    :root {
+      --bg: #0f1115; --panel: #171a21; --panel2: #1f232c; --border: #2a2f3a;
+      --text: #e6e9ef; --muted: #8b93a7; --accent: #3ecf8e; --accent2: #2b8a64;
+      --danger: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg); color: var(--text); }
+    header { display: flex; align-items: center; gap: 12px; padding: 12px 18px;
+      background: var(--panel); border-bottom: 1px solid var(--border); }
+    header .logo { font-weight: 700; font-size: 16px; color: var(--accent); }
+    header .muted { color: var(--muted); font-size: 12px; }
+    .layout { display: grid; grid-template-columns: 210px 1fr; height: calc(100vh - 49px); }
+    nav { background: var(--panel); border-right: 1px solid var(--border); padding: 12px 8px; }
+    nav button { display: block; width: 100%; text-align: left; background: none; border: none;
+      color: var(--muted); padding: 9px 12px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+    nav button:hover { background: var(--panel2); color: var(--text); }
+    nav button.active { background: var(--panel2); color: var(--accent); font-weight: 600; }
+    main { padding: 20px 26px; overflow: auto; }
+    h2 { margin: 0 0 14px; font-size: 18px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    input, select, textarea { background: var(--panel2); border: 1px solid var(--border);
+      color: var(--text); padding: 8px 10px; border-radius: 8px; font-size: 13px; }
+    textarea { width: 100%; min-height: 90px; font-family: ui-monospace, monospace; }
+    button.btn { background: var(--accent); color: #04130c; border: none; padding: 8px 14px;
+      border-radius: 8px; font-weight: 600; cursor: pointer; }
+    button.btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+    button.btn.danger { background: var(--danger); color: #1a0606; }
+    table { border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 13px; }
+    th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+    th { background: var(--panel2); position: sticky; top: 0; }
+    td { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--panel2);
+      border: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 16px; margin-bottom: 16px; }
+    pre { background: var(--panel2); padding: 12px; border-radius: 8px; overflow: auto; font-size: 12px;
+      border: 1px solid var(--border); }
+    .log { font-family: ui-monospace, monospace; font-size: 12px; }
+    .log .ev { padding: 4px 8px; border-bottom: 1px solid var(--border); }
+    .muted { color: var(--muted); }
+    a { color: var(--accent); }
+    label.small { font-size: 12px; color: var(--muted); display: block; margin-bottom: 3px; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="logo">⚡ KobeDB Studio</span>
+    <span class="muted" id="conn">connecting…</span>
+    <span style="flex:1"></span>
+    <span class="muted">A self-hosted Supabase-style backend</span>
+  </header>
+  <div class="layout">
+    <nav>
+      <button data-view="tables" class="active">📋 Table Editor</button>
+      <button data-view="schema">🏗️ Schema Designer</button>
+      <button data-view="sql">🧮 SQL Editor</button>
+      <button data-view="auth">👤 Authentication</button>
+      <button data-view="policies">🛡️ Policies (RLS)</button>
+      <button data-view="storage">📦 Storage</button>
+      <button data-view="realtime">📡 Realtime</button>
+      <button data-view="functions">⚡ Edge Functions</button>
+      <button data-view="api">🔌 API Docs</button>
+    </nav>
+    <main id="main"></main>
+  </div>
+
+  <script>
+    const API = location.origin;
+    let SERVICE_KEY = localStorage.getItem('kobedb_service_key') || '';
+    const $ = (sel, el = document) => el.querySelector(sel);
+    const h = (s) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+    function headers(json = true) {
+      const out = {};
+      if (json) out['Content-Type'] = 'application/json';
+      if (SERVICE_KEY) out['Authorization'] = 'Bearer ' + SERVICE_KEY;
+      return out;
+    }
+    async function api(path, opts = {}) {
+      const res = await fetch(API + path, opts);
+      const text = await res.text();
+      let data; try { data = JSON.parse(text); } catch { data = text; }
+      if (!res.ok) throw new Error((data && data.error) || res.statusText);
+      return data;
+    }
+
+    // ── Views ────────────────────────────────────────────────────────────
+    const views = {};
+
+    views.tables = async (main) => {
+      main.innerHTML = `<h2>Table Editor</h2>
+        <div class="row"><select id="tableSel"></select>
+        <button class="btn secondary" id="refresh">Refresh</button>
+        <span class="muted" id="count"></span></div>
+        <div id="tableData"></div>`;
+      const tables = await api('/rest/v1/');
+      const sel = $('#tableSel', main);
+      sel.innerHTML = Object.keys(tables).map(t => `<option>${h(t)}</option>`).join('');
+      const load = async () => {
+        const t = sel.value;
+        const rows = await api('/rest/v1/' + t + '?limit=100');
+        $('#count', main).textContent = rows.length + ' rows';
+        const cols = tables[t];
+        $('#tableData', main).innerHTML = `<table><thead><tr>${cols.map(c => `<th>${h(c)}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map(r => `<tr>${cols.map(c => `<td>${h(typeof r[c] === 'object' ? JSON.stringify(r[c]) : r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+      };
+      sel.onchange = load; $('#refresh', main).onclick = load;
+      await load();
+    };
+
+    views.sql = async (main) => {
+      main.innerHTML = `<h2>SQL Editor</h2>
+        <div class="card"><label class="small">Run arbitrary SQL against your database (requires the service role key, set under Authentication). Results render below.</label>
+        <textarea id="sql">select * from public.todos limit 10;</textarea>
+        <div class="row" style="margin-top:8px"><button class="btn" id="run">Run</button>
+        <span class="muted" id="sqlMeta"></span></div></div>
+        <div id="out"></div>`;
+      $('#run', main).onclick = async () => {
+        try {
+          const r = await api('/admin/sql', { method: 'POST', headers: headers(), body: JSON.stringify({ query: $('#sql', main).value }) });
+          $('#sqlMeta', main).textContent = `${r.command || ''} · ${r.rowCount ?? 0} row(s)`;
+          if (r.rows && r.rows.length) {
+            const cols = r.fields && r.fields.length ? r.fields : Object.keys(r.rows[0]);
+            $('#out', main).innerHTML = `<table><thead><tr>${cols.map(c => `<th>${h(c)}</th>`).join('')}</tr></thead><tbody>${r.rows.map(row => `<tr>${cols.map(c => `<td>${h(typeof row[c] === 'object' ? JSON.stringify(row[c]) : row[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+          } else {
+            $('#out', main).innerHTML = `<pre>${h(JSON.stringify(r, null, 2))}</pre>`;
+          }
+        } catch (e) { $('#out', main).innerHTML = `<pre style="color:var(--danger)">${h(e.message)}</pre>`; }
+      };
+    };
+
+    views.schema = async (main) => {
+      main.innerHTML = `<h2>Schema Designer</h2>
+        <p class="muted">Create and alter tables (requires the service role key). New tables get an auto <code>id</code> primary key unless you mark one.</p>
+        <div class="card"><h3 style="margin-top:0">Create table</h3>
+        <div class="row"><input id="tName" placeholder="table name"/></div>
+        <div id="colRows" style="margin-top:10px"></div>
+        <button class="btn secondary" id="addCol" style="margin-top:8px">+ Add column</button>
+        <div style="margin-top:10px"><button class="btn" id="createTbl">Create table</button> <span class="muted" id="ctOut"></span></div></div>
+        <h3>Existing schema</h3><div id="schemaData"></div>`;
+      const TYPES = ['text','int','bigint','boolean','uuid','jsonb','timestamptz','date','numeric','serial'];
+      const colRows = $('#colRows', main);
+      const addCol = (name = '', type = 'text') => {
+        const div = document.createElement('div');
+        div.className = 'row'; div.style.marginBottom = '6px';
+        div.innerHTML = `<input class="cName" placeholder="column" value="${h(name)}" style="width:160px"/>
+          <select class="cType">${TYPES.map(t => `<option${t===type?' selected':''}>${t}</option>`).join('')}</select>
+          <label class="small"><input type="checkbox" class="cNull" checked/> nullable</label>
+          <label class="small"><input type="checkbox" class="cPk"/> primary key</label>
+          <input class="cDef" placeholder="default (optional)" style="width:150px"/>
+          <button class="btn danger cDel">×</button>`;
+        div.querySelector('.cDel').onclick = () => div.remove();
+        colRows.appendChild(div);
+      };
+      addCol('title', 'text');
+      $('#addCol', main).onclick = () => addCol();
+      $('#createTbl', main).onclick = async () => {
+        const columns = [...colRows.querySelectorAll('.row')].map(r => ({
+          name: r.querySelector('.cName').value.trim(),
+          type: r.querySelector('.cType').value,
+          nullable: r.querySelector('.cNull').checked,
+          primaryKey: r.querySelector('.cPk').checked,
+          default: r.querySelector('.cDef').value.trim() || undefined,
+        })).filter(c => c.name);
+        try {
+          await api('/admin/schema/tables', { method: 'POST', headers: headers(), body: JSON.stringify({ name: $('#tName', main).value.trim(), columns }) });
+          $('#ctOut', main).textContent = 'Created ✓'; load();
+        } catch (e) { $('#ctOut', main).textContent = e.message; }
+      };
+      async function load() {
+        try {
+          const d = await api('/admin/schema', { headers: headers() });
+          $('#schemaData', main).innerHTML = Object.entries(d.tables).map(([t, cols]) =>
+            `<div class="card"><div class="row"><h3 style="margin:0;flex:1">${h(t)}</h3>
+             <button class="btn danger" data-drop="${h(t)}">Drop table</button></div>
+             <table><thead><tr><th>column</th><th>type</th><th>nullable</th><th>default</th><th>pk</th></tr></thead>
+             <tbody>${cols.map(c => `<tr><td>${h(c.name)}</td><td>${h(c.type)}</td><td>${c.nullable}</td><td>${h(c.default||'')}</td><td>${c.primaryKey?'🔑':''}</td></tr>`).join('')}</tbody></table></div>`
+          ).join('');
+          main.querySelectorAll('[data-drop]').forEach(b => b.onclick = async () => {
+            if (!confirm('Drop table ' + b.dataset.drop + '?')) return;
+            await api('/admin/schema/tables/' + b.dataset.drop, { method: 'DELETE', headers: headers() }); load();
+          });
+        } catch (e) { $('#schemaData', main).innerHTML = `<p class="muted">${h(e.message)}</p>`; }
+      }
+      load();
+    };
+
+    views.auth = async (main) => {
+      main.innerHTML = `<h2>Authentication</h2>
+        <div class="card"><label class="small">Service role key (stored locally, used for admin calls)</label>
+        <div class="row"><input id="svc" style="flex:1" type="password" value="${h(SERVICE_KEY)}" placeholder="SERVICE_ROLE_KEY"/>
+        <button class="btn" id="saveKey">Save</button></div></div>
+        <div class="card"><h3 style="margin-top:0">Create a test user</h3>
+        <div class="row"><input id="em" placeholder="email"/><input id="pw" placeholder="password" type="password"/>
+        <button class="btn" id="signup">Sign up</button></div><div id="signupOut" class="muted"></div></div>
+        <div class="card"><h3 style="margin-top:0">Passwordless magic link</h3>
+        <div class="row"><input id="mlEmail" placeholder="email"/><button class="btn secondary" id="magic">Generate link</button></div>
+        <div id="mlOut" class="muted" style="margin-top:8px;word-break:break-all"></div></div>
+        <h3>Users</h3><div id="users"></div>`;
+      $('#magic', main).onclick = async () => {
+        try {
+          const r = await api('/auth/v1/magiclink', { method: 'POST', headers: headers(), body: JSON.stringify({ email: $('#mlEmail', main).value }) });
+          $('#mlOut', main).innerHTML = `Action link (would be emailed): <a href="${h(r.action_link)}" target="_blank">${h(r.action_link)}</a>`;
+        } catch (e) { $('#mlOut', main).textContent = e.message; }
+      };
+      $('#saveKey', main).onclick = () => {
+        SERVICE_KEY = $('#svc', main).value.trim();
+        localStorage.setItem('kobedb_service_key', SERVICE_KEY); loadUsers();
+      };
+      $('#signup', main).onclick = async () => {
+        try {
+          await api('/auth/v1/signup', { method: 'POST', headers: headers(),
+            body: JSON.stringify({ email: $('#em', main).value, password: $('#pw', main).value }) });
+          $('#signupOut', main).textContent = 'Created ✓'; loadUsers();
+        } catch (e) { $('#signupOut', main).textContent = e.message; }
+      };
+      async function loadUsers() {
+        try {
+          const users = await api('/auth/v1/admin/users', { headers: headers() });
+          $('#users', main).innerHTML = `<table><thead><tr><th>id</th><th>email</th><th>role</th><th>created</th></tr></thead>
+            <tbody>${users.map(u => `<tr><td>${h(u.id)}</td><td>${h(u.email)}</td><td><span class="pill">${h(u.role)}</span></td><td>${h(u.created_at)}</td></tr>`).join('')}</tbody></table>`;
+        } catch (e) { $('#users', main).innerHTML = `<p class="muted">${h(e.message)} (set a valid service role key above)</p>`; }
+      }
+      loadUsers();
+    };
+
+    views.storage = async (main) => {
+      main.innerHTML = `<h2>Storage</h2>
+        <div class="card"><div class="row"><input id="bucket" placeholder="bucket id"/>
+        <label><input type="checkbox" id="pub"/> public</label>
+        <button class="btn" id="mkbucket">Create bucket</button></div></div>
+        <h3>Buckets</h3><div id="buckets"></div>
+        <div class="card"><h3 style="margin-top:0">Upload to bucket</h3>
+        <div class="row"><select id="upBucket"></select><input type="file" id="file"/>
+        <button class="btn" id="upload">Upload</button></div><div id="upOut" class="muted"></div></div>
+        <h3>Objects</h3><div class="row"><select id="lsBucket"></select>
+        <button class="btn secondary" id="lsbtn">List</button></div><div id="objects"></div>`;
+      const refresh = async () => {
+        const bs = await api('/storage/v1/bucket', { headers: headers(false) });
+        $('#buckets', main).innerHTML = `<table><thead><tr><th>id</th><th>public</th></tr></thead><tbody>${bs.map(b => `<tr><td>${h(b.id)}</td><td>${b.public}</td></tr>`).join('')}</tbody></table>`;
+        const opts = bs.map(b => `<option>${h(b.id)}</option>`).join('');
+        $('#upBucket', main).innerHTML = opts; $('#lsBucket', main).innerHTML = opts;
+      };
+      $('#mkbucket', main).onclick = async () => {
+        await api('/storage/v1/bucket', { method: 'POST', headers: headers(),
+          body: JSON.stringify({ id: $('#bucket', main).value, public: $('#pub', main).checked }) });
+        refresh();
+      };
+      $('#upload', main).onclick = async () => {
+        const f = $('#file', main).files[0]; if (!f) return;
+        const b = $('#upBucket', main).value;
+        const res = await fetch(`${API}/storage/v1/object/${b}/${encodeURIComponent(f.name)}`, {
+          method: 'PUT', headers: { 'Content-Type': f.type || 'application/octet-stream',
+            ...(SERVICE_KEY ? { Authorization: 'Bearer ' + SERVICE_KEY } : {}) }, body: f });
+        $('#upOut', main).textContent = res.ok ? 'Uploaded ✓' : 'Failed: ' + (await res.text());
+      };
+      $('#lsbtn', main).onclick = async () => {
+        const b = $('#lsBucket', main).value;
+        const objs = await api('/storage/v1/object/list/' + b, { headers: headers(false) });
+        $('#objects', main).innerHTML = `<table><thead><tr><th>name</th><th>size</th><th>type</th><th></th></tr></thead><tbody>${objs.map(o => `<tr><td>${h(o.name)}</td><td>${o.size}</td><td>${h(o.mime_type)}</td><td><a href="${API}/storage/v1/object/${b}/${encodeURIComponent(o.name)}" target="_blank">open</a></td></tr>`).join('')}</tbody></table>`;
+      };
+      refresh();
+    };
+
+    views.realtime = async (main) => {
+      main.innerHTML = `<h2>Realtime</h2>
+        <div class="card"><div class="row"><input id="rtTable" value="todos" placeholder="table (or *)"/>
+        <button class="btn" id="sub">Subscribe</button>
+        <span class="muted">Make a change in the Table Editor or via the API to see events.</span></div></div>
+        <div class="card log" id="rtlog"><div class="ev muted">No events yet…</div></div>`;
+      let ws;
+      const log = (msg) => { const el = $('#rtlog', main);
+        el.insertAdjacentHTML('afterbegin', `<div class="ev">${h(msg)}</div>`); };
+      $('#sub', main).onclick = () => {
+        if (ws) ws.close();
+        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+        ws = new WebSocket(`${proto}://${location.host}/realtime/v1`);
+        ws.onopen = () => { ws.send(JSON.stringify({ action: 'subscribe', table: $('#rtTable', main).value })); log('connected & subscribed'); };
+        ws.onmessage = (e) => log(e.data);
+        ws.onclose = () => log('disconnected');
+      };
+    };
+
+    views.policies = async (main) => {
+      main.innerHTML = `<h2>Row-Level Security</h2>
+        <p class="muted">Tables listed here enforce policies. Requires the service role key (set it under Authentication).</p>
+        <div class="card"><h3 style="margin-top:0">Enable RLS on a table</h3>
+        <div class="row"><input id="rlsTable" placeholder="table name"/>
+        <label><input type="checkbox" id="rlsEnabled" checked/> enabled</label>
+        <button class="btn" id="rlsSave">Save</button></div></div>
+        <div class="card"><h3 style="margin-top:0">Add policy</h3>
+        <div class="row"><input id="pTable" placeholder="table"/>
+        <select id="pAction"><option>select</option><option>insert</option><option>update</option><option>delete</option></select>
+        <input id="pRoles" placeholder="roles (comma) e.g. authenticated" value="authenticated"/>
+        <input id="pOwner" placeholder="owner_column (optional)"/>
+        <button class="btn" id="pSave">Add</button></div><div id="pOut" class="muted"></div></div>
+        <h3>Current configuration</h3><div id="polData"></div>`;
+      const load = async () => {
+        try {
+          const d = await api('/admin/policies', { headers: headers() });
+          $('#polData', main).innerHTML =
+            `<h4>RLS-enabled tables</h4><table><thead><tr><th>table</th><th>enabled</th></tr></thead><tbody>${d.rls.map(r => `<tr><td>${h(r.table_name)}</td><td>${r.enabled}</td></tr>`).join('')}</tbody></table>
+             <h4>Policies</h4><table><thead><tr><th>id</th><th>table</th><th>action</th><th>roles</th><th>owner_column</th><th></th></tr></thead><tbody>${d.policies.map(p => `<tr><td>${p.id}</td><td>${h(p.table_name)}</td><td><span class="pill">${h(p.action)}</span></td><td>${h((p.roles||[]).join(','))}</td><td>${h(p.owner_column||'')}</td><td><button class="btn danger" data-del="${p.id}">del</button></td></tr>`).join('')}</tbody></table>`;
+          main.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+            await api('/admin/policies/' + b.dataset.del, { method: 'DELETE', headers: headers() }); load();
+          });
+        } catch (e) { $('#polData', main).innerHTML = `<p class="muted">${h(e.message)}</p>`; }
+      };
+      $('#rlsSave', main).onclick = async () => {
+        await api('/admin/rls', { method: 'POST', headers: headers(), body: JSON.stringify({ table: $('#rlsTable', main).value, enabled: $('#rlsEnabled', main).checked }) }); load();
+      };
+      $('#pSave', main).onclick = async () => {
+        try {
+          await api('/admin/policies', { method: 'POST', headers: headers(), body: JSON.stringify({
+            table: $('#pTable', main).value, action: $('#pAction', main).value,
+            roles: $('#pRoles', main).value.split(',').map(s => s.trim()).filter(Boolean),
+            owner_column: $('#pOwner', main).value || null }) });
+          $('#pOut', main).textContent = 'Added ✓'; load();
+        } catch (e) { $('#pOut', main).textContent = e.message; }
+      };
+      load();
+    };
+
+    views.functions = async (main) => {
+      main.innerHTML = `<h2>Edge Functions</h2>
+        <p class="muted">Functions live in <code>functions/&lt;name&gt;/index.mjs</code> and run in an isolated worker (Deno-compatible <code>Request</code>/<code>Response</code> contract).</p>
+        <h3>Deployed functions</h3><div id="fnList"></div>
+        <div class="card"><h3 style="margin-top:0">Invoke</h3>
+        <div class="row"><input id="fnName" placeholder="function name" value="hello"/>
+        <select id="fnMethod"><option>POST</option><option>GET</option></select>
+        <button class="btn" id="fnRun">Run</button></div>
+        <label class="small" style="margin-top:10px">Request body (JSON, for POST)</label>
+        <textarea id="fnBody">{"name":"Kobe"}</textarea>
+        <div id="fnOut"></div></div>`;
+      try {
+        const d = await api('/functions/v1', { headers: headers(false) });
+        $('#fnList', main).innerHTML = d.functions.length
+          ? `<table><thead><tr><th>name</th><th>endpoint</th></tr></thead><tbody>${d.functions.map(f => `<tr><td>${h(f)}</td><td><code>/functions/v1/${h(f)}</code></td></tr>`).join('')}</tbody></table>`
+          : '<p class="muted">No functions found.</p>';
+      } catch (e) { $('#fnList', main).innerHTML = `<p class="muted">${h(e.message)}</p>`; }
+      $('#fnRun', main).onclick = async () => {
+        const method = $('#fnMethod', main).value;
+        const opts = { method, headers: headers() };
+        if (method === 'POST') opts.body = $('#fnBody', main).value;
+        try {
+          const res = await fetch(`${API}/functions/v1/${$('#fnName', main).value}`, opts);
+          const text = await res.text();
+          $('#fnOut', main).innerHTML = `<pre>${h(text)}</pre>`;
+        } catch (e) { $('#fnOut', main).innerHTML = `<pre style="color:var(--danger)">${h(e.message)}</pre>`; }
+      };
+    };
+
+    views.api = async (main) => {
+      main.innerHTML = `<h2>API Docs</h2>
+        <div class="card"><h3 style="margin-top:0">Base URL</h3><pre>${API}</pre></div>
+        <div class="card"><h3 style="margin-top:0">REST</h3>
+        <pre>GET    /rest/v1/:table?col=eq.value&order=col.desc&limit=10
+POST   /rest/v1/:table       (auth)   body: { ...row }
+PATCH  /rest/v1/:table?id=eq.1 (auth)  body: { ...changes }
+DELETE /rest/v1/:table?id=eq.1 (auth)</pre></div>
+        <div class="card"><h3 style="margin-top:0">Auth</h3>
+        <pre>POST /auth/v1/signup                 { email, password }
+POST /auth/v1/token?grant_type=password        { email, password }
+POST /auth/v1/token?grant_type=refresh_token   { refresh_token }
+GET  /auth/v1/user                   (Bearer access token)</pre></div>
+        <div class="card"><h3 style="margin-top:0">Storage</h3>
+        <pre>POST   /storage/v1/bucket            { id, public }
+PUT    /storage/v1/object/:bucket/:name   (raw body)
+GET    /storage/v1/object/:bucket/:name
+GET    /storage/v1/object/list/:bucket</pre></div>
+        <div class="card"><h3 style="margin-top:0">Realtime (WebSocket)</h3>
+        <pre>ws://${location.host}/realtime/v1
+→ { "action": "subscribe", "table": "todos", "events": ["INSERT","UPDATE","DELETE"] }
+← { "event": "change", "payload": { type, table, record, old } }</pre></div>`;
+    };
+
+    // ── Router ───────────────────────────────────────────────────────────
+    async function go(view) {
+      document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+      const main = $('#main');
+      main.innerHTML = '<p class="muted">Loading…</p>';
+      try { await views[view](main); }
+      catch (e) { main.innerHTML = `<h2>${view}</h2><pre style="color:var(--danger)">${h(e.message)}</pre>`; }
+    }
+    document.querySelectorAll('nav button').forEach(b => b.onclick = () => go(b.dataset.view));
+
+    (async () => {
+      try { await api('/health'); $('#conn').textContent = '● connected'; $('#conn').style.color = 'var(--accent)'; }
+      catch { $('#conn').textContent = '● offline'; $('#conn').style.color = 'var(--danger)'; }
+      go('tables');
+    })();
+  </script>
+</body>
+</html>
