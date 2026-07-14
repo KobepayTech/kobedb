@@ -111,13 +111,25 @@ curl -X POST http://localhost:8000/admin/policies -H "Authorization: Bearer $SER
 ## Passwordless & OAuth login
 
 ```bash
-# Magic link — returns an action_link (wire up an email provider for production)
+# Magic link — emails a one-time sign-in link via the configured provider
 curl -X POST http://localhost:8000/auth/v1/magiclink -d '{"email":"me@example.com"}'
 
 # OAuth — set GOOGLE_/GITHUB_CLIENT_ID+SECRET, then redirect the browser to:
 #   http://localhost:8000/auth/v1/authorize?provider=github&redirect_to=<app-url>
 # After consent, KobeDB issues its own session and redirects back with tokens in the URL fragment.
 ```
+
+### Email delivery
+
+Magic-link emails are sent through a pluggable provider, selected with `EMAIL_PROVIDER`:
+
+| `EMAIL_PROVIDER` | Behaviour | Config |
+| --- | --- | --- |
+| `log` (default) | Prints the link to the server console and returns it in the API response — zero setup for local dev. | — |
+| `smtp` | Sends via any SMTP server (Gmail, SendGrid SMTP, Mailgun, Postmark…). Uses `nodemailer` (optional dep). | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM` |
+| `resend` | Sends via the [Resend](https://resend.com) HTTP API. | `RESEND_API_KEY`, `EMAIL_FROM` |
+
+When a real provider (`smtp`/`resend`) is configured, the raw link is **not** returned in the API response — it only arrives by email.
 
 ## Edge Functions
 
@@ -239,7 +251,7 @@ kobedb/
 - ✅ Edge functions runtime (Deno isolate + worker-thread fallback)
 - ✅ S3-compatible storage backend option
 - ✅ Studio: schema designer & SQL migrations
-- Email provider integration for magic links
+- ✅ Email provider integration for magic links (log / SMTP / Resend)
 - Database backups & point-in-time restore
 - Per-column RLS and richer policy expressions
 

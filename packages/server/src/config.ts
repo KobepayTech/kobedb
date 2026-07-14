@@ -39,6 +39,16 @@ export const config = {
   // 'auto' uses Deno if the binary is present, else worker threads. Force with 'deno' | 'worker'.
   functionsRuntime: (process.env.FUNCTIONS_RUNTIME ?? 'auto') as 'auto' | 'deno' | 'worker',
 
+  // Email delivery for magic links: 'log' (default, prints to console), 'smtp', or 'resend'.
+  emailProvider: (process.env.EMAIL_PROVIDER ?? 'log') as 'log' | 'smtp' | 'resend',
+  emailFrom: process.env.EMAIL_FROM ?? 'KobeDB <no-reply@kobedb.local>',
+  smtpHost: process.env.SMTP_HOST ?? 'localhost',
+  smtpPort: num(process.env.SMTP_PORT, 587),
+  smtpSecure: (process.env.SMTP_SECURE ?? 'false') === 'true',
+  smtpUser: process.env.SMTP_USER ?? '',
+  smtpPass: process.env.SMTP_PASS ?? '',
+  resendApiKey: process.env.RESEND_API_KEY ?? '',
+
   studioEnabled: (process.env.STUDIO_ENABLED ?? 'true') !== 'false',
 };
 
