@@ -68,6 +68,7 @@
       <button data-view="backups">💾 Backups</button>
       <button data-view="realtime">📡 Realtime</button>
       <button data-view="functions">⚡ Edge Functions</button>
+      <button data-view="deploy">🚀 Deploy</button>
       <button data-view="api">🔌 API Docs</button>
     </nav>
     <main id="main"></main>
@@ -395,6 +396,63 @@
           $('#fnOut', main).innerHTML = `<pre>${h(text)}</pre>`;
         } catch (e) { $('#fnOut', main).innerHTML = `<pre style="color:var(--danger)">${h(e.message)}</pre>`; }
       };
+    };
+
+    views.deploy = async (main) => {
+      main.innerHTML = `<h2>Deploy <span class="pill" id="rtBadge">runtime…</span></h2>
+        <p class="muted">A Coolify-style app platform. Deploy from a Docker image or a git repo; route a domain via the built-in proxy. Requires the service role key.</p>
+        <div class="card"><h3 style="margin-top:0">New project</h3>
+        <div class="row"><input id="projName" placeholder="project name"/><button class="btn" id="mkProj">Create</button></div></div>
+        <div class="card"><h3 style="margin-top:0">New app</h3>
+        <div class="row"><select id="appProj"></select><input id="appName" placeholder="app name"/>
+        <select id="appSrcType"><option value="image">image</option><option value="git">git</option></select>
+        <input id="appSrc" placeholder="nginx:alpine  or  https://github.com/u/repo"/></div>
+        <div class="row" style="margin-top:8px"><input id="appPort" type="number" value="8080" style="width:110px" title="container port"/>
+        <input id="appDomain" placeholder="domain e.g. app.localhost"/>
+        <input id="appHealth" placeholder="health check path e.g. /health" style="width:170px"/>
+        <input id="appEnv" placeholder='env JSON e.g. {"KEY":"val"}' style="flex:1"/>
+        <button class="btn" id="mkApp">Create app</button></div><div id="appOut" class="muted"></div></div>
+        <h3>Apps</h3><div id="appList"></div>
+        <div id="logPanel"></div>`;
+      try { const r = await api('/deploy/v1', { headers: headers() }); $('#rtBadge', main).textContent = 'runtime: ' + r.runtime; }
+      catch { $('#rtBadge', main).textContent = 'runtime: ?'; }
+      async function loadProjects() {
+        const ps = await api('/deploy/v1/projects', { headers: headers() });
+        $('#appProj', main).innerHTML = ps.map(p => `<option value="${p.id}">${h(p.name)}</option>`).join('');
+        return ps;
+      }
+      async function loadApps() {
+        try {
+          const apps = await api('/deploy/v1/apps', { headers: headers() });
+          $('#appList', main).innerHTML = apps.length ? `<table><thead><tr><th>app</th><th>source</th><th>status</th><th>domain</th><th>port</th><th>actions</th></tr></thead><tbody>${apps.map(a => `<tr>
+            <td>${h(a.name)}</td><td><span class="pill">${h(a.source_type)}</span> ${h(a.source)}</td>
+            <td><span class="pill">${h(a.status)}</span></td><td>${h(a.domain||'')}</td><td>${a.host_port||''}</td>
+            <td><button class="btn" data-deploy="${a.id}">deploy</button>
+            <button class="btn secondary" data-stop="${a.id}">stop</button>
+            <button class="btn secondary" data-logs="${a.id}">logs</button>
+            <button class="btn danger" data-del="${a.id}">del</button></td></tr>`).join('')}</tbody></table>` : '<p class="muted">No apps yet.</p>';
+          main.querySelectorAll('[data-deploy]').forEach(b => b.onclick = async () => { await api('/deploy/v1/apps/'+b.dataset.deploy+'/deploy', { method:'POST', headers: headers() }); setTimeout(loadApps, 800); });
+          main.querySelectorAll('[data-stop]').forEach(b => b.onclick = async () => { await api('/deploy/v1/apps/'+b.dataset.stop+'/stop', { method:'POST', headers: headers() }); loadApps(); });
+          main.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { await api('/deploy/v1/apps/'+b.dataset.del, { method:'DELETE', headers: headers() }); loadApps(); });
+          main.querySelectorAll('[data-logs]').forEach(b => b.onclick = async () => {
+            const res = await fetch(API+'/deploy/v1/apps/'+b.dataset.logs+'/logs', { headers: headers(false) });
+            $('#logPanel', main).innerHTML = `<h3>Logs</h3><pre>${h(await res.text())}</pre>`;
+          });
+        } catch (e) { $('#appList', main).innerHTML = `<p class="muted">${h(e.message)}</p>`; }
+      }
+      $('#mkProj', main).onclick = async () => { try { await api('/deploy/v1/projects', { method:'POST', headers: headers(), body: JSON.stringify({ name: $('#projName', main).value }) }); loadProjects(); } catch(e){ alert(e.message); } };
+      $('#mkApp', main).onclick = async () => {
+        let env = {}; try { env = $('#appEnv', main).value ? JSON.parse($('#appEnv', main).value) : {}; } catch { $('#appOut', main).textContent = 'env must be valid JSON'; return; }
+        try {
+          await api('/deploy/v1/apps', { method:'POST', headers: headers(), body: JSON.stringify({
+            project_id: $('#appProj', main).value, name: $('#appName', main).value,
+            source_type: $('#appSrcType', main).value, source: $('#appSrc', main).value,
+            container_port: Number($('#appPort', main).value)||8080, domain: $('#appDomain', main).value || null,
+            health_check_path: $('#appHealth', main).value || null, env }) });
+          $('#appOut', main).textContent = 'App created ✓'; loadApps();
+        } catch (e) { $('#appOut', main).textContent = e.message; }
+      };
+      await loadProjects(); await loadApps();
     };
 
     views.api = async (main) => {

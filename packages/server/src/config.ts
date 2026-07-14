@@ -36,6 +36,11 @@ export const config = {
 
   backupDir: process.env.BACKUP_DIR ?? './backups',
 
+  // KobeDeploy (Coolify-style app platform)
+  deployRuntime: (process.env.DEPLOY_RUNTIME ?? 'auto') as 'auto' | 'docker' | 'mock',
+  deployProxyEnabled: (process.env.DEPLOY_PROXY_ENABLED ?? 'true') !== 'false',
+  deployProxyPort: num(process.env.DEPLOY_PROXY_PORT, 8090),
+
   functionsPath: process.env.FUNCTIONS_PATH ?? './functions',
   functionTimeoutMs: num(process.env.FUNCTION_TIMEOUT_MS, 10000),
   // 'auto' uses Deno if the binary is present, else worker threads. Force with 'deno' | 'worker'.
