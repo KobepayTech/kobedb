@@ -31,6 +31,26 @@ function withOwnerScope(
   return { where: where ? `${where} and ${cond}` : `where ${cond}`, params: next };
 }
 
+// Columns returned by insert/update, respecting a write policy's column allow-list.
+function returningCols(decision: PolicyDecision): string {
+  if (!decision.columns) return '*';
+  const set = new Set(decision.columns);
+  if (decision.ownerColumn) set.add(decision.ownerColumn);
+  const list = [...set];
+  return list.length ? list.map(ident).join(', ') : '*';
+}
+
+// Reject writes to columns outside a write policy's allow-list (the owner column,
+// which the server sets itself, is always permitted).
+function assertWritableColumns(keys: string[], decision: PolicyDecision) {
+  if (!decision.columns) return;
+  const allowed = new Set(decision.columns);
+  if (decision.ownerColumn) allowed.add(decision.ownerColumn);
+  const bad = keys.filter((k) => !allowed.has(k));
+  if (bad.length)
+    throw Object.assign(new Error(`not permitted to write column(s): ${bad.join(', ')}`), { statusCode: 403 });
+}
+
 async function gate(
   table: string,
   action: 'select' | 'insert' | 'update' | 'delete',
@@ -61,8 +81,26 @@ export async function restRoutes(app: FastifyInstance) {
     const decision = await gate(table, 'select', ctx);
     const parsed: ParsedQuery = parseQuery(req.query as any, cols);
 
+    // Enforce a read policy's column allow-list.
+    let selectSql = parsed.select;
+    if (decision.columns) {
+      const allowed = new Set(decision.columns);
+      const q = req.query as any;
+      const requested: string[] = q.select
+        ? String(Array.isArray(q.select) ? q.select[0] : q.select).split(',').map((s) => s.trim()).filter(Boolean)
+        : [...cols];
+      if (q.select) {
+        const denied = requested.filter((c) => !allowed.has(c));
+        if (denied.length)
+          return reply.code(403).send({ error: `not permitted to read column(s): ${denied.join(', ')}` });
+      }
+      const readable = requested.filter((c) => allowed.has(c));
+      if (!readable.length) return reply.code(403).send({ error: 'no readable columns for this role' });
+      selectSql = readable.map(ident).join(', ');
+    }
+
     const scoped = withOwnerScope(parsed.where, parsed.params, decision.ownerColumn, ctx.userId);
-    let sql = `select ${parsed.select} from public.${ident(table)} ${scoped.where}`;
+    let sql = `select ${selectSql} from public.${ident(table)} ${scoped.where}`;
     if (parsed.orderBy) sql += ` order by ${parsed.orderBy}`;
     if (parsed.limit != null) sql += ` limit ${parsed.limit}`;
     if (parsed.offset != null) sql += ` offset ${parsed.offset}`;
@@ -96,6 +134,7 @@ export async function restRoutes(app: FastifyInstance) {
     for (const k of keys) {
       if (!cols.has(k)) return reply.code(400).send({ error: `unknown column: ${k}` });
     }
+    assertWritableColumns(keys, decision);
 
     const colList = keys.map(ident).join(', ');
     const valuesSql: string[] = [];
@@ -109,7 +148,7 @@ export async function restRoutes(app: FastifyInstance) {
       valuesSql.push(`(${ph.join(', ')})`);
     }
 
-    const sql = `insert into public.${ident(table)} (${colList}) values ${valuesSql.join(', ')} returning *`;
+    const sql = `insert into public.${ident(table)} (${colList}) values ${valuesSql.join(', ')} returning ${returningCols(decision)}`;
     const { rows } = await query(sql, params);
     return reply.code(201).send(Array.isArray(body) ? rows : rows[0]);
   });
@@ -129,6 +168,7 @@ export async function restRoutes(app: FastifyInstance) {
     const keys = Object.keys(patch ?? {});
     if (!keys.length) return reply.code(400).send({ error: 'no fields to update' });
     for (const k of keys) if (!cols.has(k)) return reply.code(400).send({ error: `unknown column: ${k}` });
+    assertWritableColumns(keys, decision);
 
     const scoped = withOwnerScope(parsed.where, parsed.params, decision.ownerColumn, ctx.userId);
     const params = [...scoped.params];
@@ -140,7 +180,7 @@ export async function restRoutes(app: FastifyInstance) {
       })
       .join(', ');
 
-    const sql = `update public.${ident(table)} set ${setSql} ${scoped.where} returning *`;
+    const sql = `update public.${ident(table)} set ${setSql} ${scoped.where} returning ${returningCols(decision)}`;
     const { rows } = await query(sql, params);
     return reply.send(rows);
   });

@@ -10,6 +10,9 @@ RUN npm run build --workspace @kobedb/server
 FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# postgresql-client provides pg_dump / pg_restore for the backup & restore API.
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages/server/node_modules ./packages/server/node_modules
 COPY --from=build /app/packages/server/dist ./packages/server/dist

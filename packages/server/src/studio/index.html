@@ -65,6 +65,7 @@
       <button data-view="auth">👤 Authentication</button>
       <button data-view="policies">🛡️ Policies (RLS)</button>
       <button data-view="storage">📦 Storage</button>
+      <button data-view="backups">💾 Backups</button>
       <button data-view="realtime">📡 Realtime</button>
       <button data-view="functions">⚡ Edge Functions</button>
       <button data-view="api">🔌 API Docs</button>
@@ -270,6 +271,42 @@
       refresh();
     };
 
+    views.backups = async (main) => {
+      main.innerHTML = `<h2>Database Backups</h2>
+        <p class="muted">Backups use <code>pg_dump</code> (custom format) and restore with <code>pg_restore</code>. Requires the service role key.</p>
+        <div class="card"><div class="row"><button class="btn" id="mkBackup">Create backup now</button>
+        <span class="muted" id="bkOut"></span></div></div>
+        <h3>Available backups</h3><div id="bkList"></div>`;
+      $('#mkBackup', main).onclick = async () => {
+        $('#bkOut', main).textContent = 'Running pg_dump…';
+        try { const r = await api('/admin/backups', { method: 'POST', headers: headers() });
+          $('#bkOut', main).textContent = `Created ${r.file} (${r.size} bytes)`; load(); }
+        catch (e) { $('#bkOut', main).textContent = e.message; }
+      };
+      async function load() {
+        try {
+          const d = await api('/admin/backups', { headers: headers() });
+          if (!d.pg_dump) { $('#bkList', main).innerHTML = '<p class="muted">pg_dump/pg_restore not installed on the server.</p>'; return; }
+          $('#bkList', main).innerHTML = d.backups.length
+            ? `<table><thead><tr><th>file</th><th>size</th><th>created</th><th>actions</th></tr></thead><tbody>${d.backups.map(b => `<tr><td>${h(b.file)}</td><td>${b.size}</td><td>${h(b.created_at)}</td><td>
+               <a class="btn secondary" href="${API}/admin/backups/${encodeURIComponent(b.file)}/download" target="_blank">download</a>
+               <button class="btn" data-restore="${h(b.file)}">restore</button>
+               <button class="btn danger" data-delbk="${h(b.file)}">del</button></td></tr>`).join('')}</tbody></table>`
+            : '<p class="muted">No backups yet.</p>';
+          main.querySelectorAll('[data-restore]').forEach(b => b.onclick = async () => {
+            if (!confirm('Restore ' + b.dataset.restore + '? This overwrites current data.')) return;
+            $('#bkOut', main).textContent = 'Restoring…';
+            try { await api('/admin/backups/' + encodeURIComponent(b.dataset.restore) + '/restore', { method: 'POST', headers: headers() });
+              $('#bkOut', main).textContent = 'Restored ✓'; } catch (e) { $('#bkOut', main).textContent = e.message; }
+          });
+          main.querySelectorAll('[data-delbk]').forEach(b => b.onclick = async () => {
+            await api('/admin/backups/' + encodeURIComponent(b.dataset.delbk), { method: 'DELETE', headers: headers() }); load();
+          });
+        } catch (e) { $('#bkList', main).innerHTML = `<p class="muted">${h(e.message)}</p>`; }
+      }
+      load();
+    };
+
     views.realtime = async (main) => {
       main.innerHTML = `<h2>Realtime</h2>
         <div class="card"><div class="row"><input id="rtTable" value="todos" placeholder="table (or *)"/>
@@ -301,6 +338,7 @@
         <select id="pAction"><option>select</option><option>insert</option><option>update</option><option>delete</option></select>
         <input id="pRoles" placeholder="roles (comma) e.g. authenticated" value="authenticated"/>
         <input id="pOwner" placeholder="owner_column (optional)"/>
+        <input id="pCols" placeholder="columns (comma, optional)"/>
         <button class="btn" id="pSave">Add</button></div><div id="pOut" class="muted"></div></div>
         <h3>Current configuration</h3><div id="polData"></div>`;
       const load = async () => {
@@ -308,7 +346,7 @@
           const d = await api('/admin/policies', { headers: headers() });
           $('#polData', main).innerHTML =
             `<h4>RLS-enabled tables</h4><table><thead><tr><th>table</th><th>enabled</th></tr></thead><tbody>${d.rls.map(r => `<tr><td>${h(r.table_name)}</td><td>${r.enabled}</td></tr>`).join('')}</tbody></table>
-             <h4>Policies</h4><table><thead><tr><th>id</th><th>table</th><th>action</th><th>roles</th><th>owner_column</th><th></th></tr></thead><tbody>${d.policies.map(p => `<tr><td>${p.id}</td><td>${h(p.table_name)}</td><td><span class="pill">${h(p.action)}</span></td><td>${h((p.roles||[]).join(','))}</td><td>${h(p.owner_column||'')}</td><td><button class="btn danger" data-del="${p.id}">del</button></td></tr>`).join('')}</tbody></table>`;
+             <h4>Policies</h4><table><thead><tr><th>id</th><th>table</th><th>action</th><th>roles</th><th>owner_column</th><th>columns</th><th></th></tr></thead><tbody>${d.policies.map(p => `<tr><td>${p.id}</td><td>${h(p.table_name)}</td><td><span class="pill">${h(p.action)}</span></td><td>${h((p.roles||[]).join(','))}</td><td>${h(p.owner_column||'')}</td><td>${h((p.columns||[]).join(',')||'all')}</td><td><button class="btn danger" data-del="${p.id}">del</button></td></tr>`).join('')}</tbody></table>`;
           main.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
             await api('/admin/policies/' + b.dataset.del, { method: 'DELETE', headers: headers() }); load();
           });
@@ -322,7 +360,8 @@
           await api('/admin/policies', { method: 'POST', headers: headers(), body: JSON.stringify({
             table: $('#pTable', main).value, action: $('#pAction', main).value,
             roles: $('#pRoles', main).value.split(',').map(s => s.trim()).filter(Boolean),
-            owner_column: $('#pOwner', main).value || null }) });
+            owner_column: $('#pOwner', main).value || null,
+            columns: $('#pCols', main).value.split(',').map(s => s.trim()).filter(Boolean) }) });
           $('#pOut', main).textContent = 'Added ✓'; load();
         } catch (e) { $('#pOut', main).textContent = e.message; }
       };
