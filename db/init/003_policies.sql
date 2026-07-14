@@ -25,6 +25,9 @@ create table if not exists kobedb.policies (
   -- When set, rows are scoped to the caller: reads/updates/deletes are filtered
   -- to `owner_column = <auth uid>`, and inserts force that column to the uid.
   owner_column text,
+  -- When set, restricts which columns this role may read (select) or write
+  -- (insert/update). NULL/empty means all columns are allowed.
+  columns      text[],
   name         text,
   created_at   timestamptz not null default now()
 );

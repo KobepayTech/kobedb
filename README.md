@@ -8,7 +8,8 @@ It bundles the pieces you need to ship an app without writing a backend:
 | --- | --- | --- |
 | **Database + REST** | Auto-generated CRUD REST API over every table in your `public` schema, with PostgREST-style filters (`eq`, `gt`, `ilike`, `in`, `order`, `limit`, …). | `/rest/v1` |
 | **Auth** | Email/password signup & login, JWT access tokens, rotating refresh tokens, **passwordless magic links**, **OAuth (Google/GitHub)**, service-role key, admin user listing. | `/auth/v1` |
-| **Row-Level Security** | A policy engine: per-table read/write rules by role, with owner-scoping so users only touch their own rows. Manageable via API/Studio. | `/admin/*` |
+| **Row-Level Security** | A policy engine: per-table read/write rules by role, owner-scoping so users only touch their own rows, and **per-column** allow-lists. Manageable via API/Studio. | `/admin/*` |
+| **Backups & restore** | On-demand `pg_dump` backups with list/download/restore/delete, via API + Studio. | `/admin/backups` |
 | **Realtime** | WebSocket subscriptions to row changes (INSERT/UPDATE/DELETE) via Postgres `LISTEN/NOTIFY`. | `ws://…/realtime/v1` |
 | **Storage** | S3-style buckets & objects with a pluggable backend: local filesystem **or** any S3-compatible service (AWS S3, MinIO, Cloudflare R2). | `/storage/v1` |
 | **Edge Functions** | Serverless functions using the Web-standard `Request`/`Response` contract, run in a **native Deno isolate** when available (OS-enforced permissions) or portable Node worker threads. | `/functions/v1` |
@@ -106,7 +107,24 @@ curl -X POST http://localhost:8000/admin/policies -H "Authorization: Bearer $SER
 - Tables **without** RLS keep the default: open reads, authenticated writes.
 - Tables **with** RLS only permit operations allowed by a matching policy.
 - `owner_column` scopes reads/updates/deletes to `column = auth.uid` and forces it on insert.
+- `columns` restricts **which columns** a role may read or write (per-column RLS); omit it for all columns.
 - The **service role** bypasses all policies.
+
+### Per-column policies
+
+Restrict sensitive columns by adding a `columns` allow-list to a policy:
+
+```bash
+# Users may read only id + nickname (never ssn), and may write only nickname
+curl -X POST http://localhost:8000/admin/policies -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"table":"profiles","action":"select","roles":["authenticated"],"columns":["id","nickname"]}'
+curl -X POST http://localhost:8000/admin/policies -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"table":"profiles","action":"insert","roles":["authenticated"],"columns":["nickname"]}'
+```
+
+Reading `select=*` returns only permitted columns; explicitly requesting a forbidden column (or writing one) returns `403`.
 
 ## Passwordless & OAuth login
 
@@ -172,6 +190,25 @@ curl -X POST http://localhost:8000/admin/sql -H "Authorization: Bearer $SERVICE_
 
 Column types are whitelisted and identifiers validated; the REST API and RLS engine pick
 up new tables immediately.
+
+## Backups & restore
+
+KobeDB backs up with PostgreSQL's own tools (`pg_dump` custom format, restored via
+`pg_restore`), so restores are transactional and portable. Manage them over the
+service-role API or the **Backups** tab in Studio:
+
+```bash
+# Create a backup (writes a timestamped .dump to BACKUP_DIR)
+curl -X POST http://localhost:8000/admin/backups -H "Authorization: Bearer $SERVICE_ROLE_KEY"
+
+# List / download / restore / delete
+curl http://localhost:8000/admin/backups -H "Authorization: Bearer $SERVICE_ROLE_KEY"
+curl -OJ http://localhost:8000/admin/backups/<file>/download -H "Authorization: Bearer $SERVICE_ROLE_KEY"
+curl -X POST http://localhost:8000/admin/backups/<file>/restore -H "Authorization: Bearer $SERVICE_ROLE_KEY"
+```
+
+The client tools (`postgresql-client`) must be installed on the server — the Docker
+image includes them; the API returns `501` if they're missing.
 
 ## S3 / object storage backends
 
@@ -252,8 +289,10 @@ kobedb/
 - ✅ S3-compatible storage backend option
 - ✅ Studio: schema designer & SQL migrations
 - ✅ Email provider integration for magic links (log / SMTP / Resend)
-- Database backups & point-in-time restore
-- Per-column RLS and richer policy expressions
+- ✅ Database backups & restore (`pg_dump` / `pg_restore`)
+- ✅ Per-column RLS
+- Point-in-time restore (WAL archiving)
+- Richer policy expressions (arbitrary SQL predicates)
 
 ## License
 

@@ -8,6 +8,7 @@ interface PolicyRow {
   action: Action;
   roles: string[];
   owner_column: string | null;
+  columns: string[] | null;
 }
 
 interface TablePolicies {
@@ -27,7 +28,7 @@ async function load(): Promise<Map<string, TablePolicies>> {
     `select table_name, enabled from kobedb.rls`,
   );
   const pol = await query<PolicyRow>(
-    `select table_name, action, roles, owner_column from kobedb.policies`,
+    `select table_name, action, roles, owner_column, columns from kobedb.policies`,
   );
 
   const map = new Map<string, TablePolicies>();
@@ -47,6 +48,8 @@ export interface PolicyDecision {
   allowed: boolean;
   /** If set, scope rows to `ownerColumn = auth.uid`. */
   ownerColumn: string | null;
+  /** Columns this role may read/write; null means all columns are allowed. */
+  columns: string[] | null;
   /** True when this table is governed by the policy engine (RLS enabled). */
   rlsManaged: boolean;
   reason?: string;
@@ -64,13 +67,15 @@ export async function evaluate(
   action: Action,
   ctx: AuthContext,
 ): Promise<PolicyDecision> {
-  if (ctx.role === 'service_role') return { allowed: true, ownerColumn: null, rlsManaged: false };
+  if (ctx.role === 'service_role')
+    return { allowed: true, ownerColumn: null, columns: null, rlsManaged: false };
 
   const map = await load();
   const tp = map.get(table);
 
   // No RLS configured for this table → defer to default gate in the route.
-  if (!tp || !tp.rlsEnabled) return { allowed: true, ownerColumn: null, rlsManaged: false };
+  if (!tp || !tp.rlsEnabled)
+    return { allowed: true, ownerColumn: null, columns: null, rlsManaged: false };
 
   const matches = tp.policies.filter(
     (p) => p.action === action && p.roles.includes(ctx.role),
@@ -79,6 +84,7 @@ export async function evaluate(
     return {
       allowed: false,
       ownerColumn: null,
+      columns: null,
       rlsManaged: true,
       reason: `no policy allows ${action} on ${table} for role ${ctx.role}`,
     };
@@ -88,9 +94,18 @@ export async function evaluate(
   // owner_column found; unscoped policies grant table-wide access.)
   const scoped = matches.find((m) => m.owner_column);
   const unscoped = matches.some((m) => !m.owner_column);
+
+  // Column allow-list: if any matching policy is unrestricted (null/empty columns),
+  // all columns are allowed; otherwise the union of the listed columns.
+  const anyUnrestricted = matches.some((m) => !m.columns || m.columns.length === 0);
+  const columns = anyUnrestricted
+    ? null
+    : [...new Set(matches.flatMap((m) => m.columns ?? []))];
+
   return {
     allowed: true,
     ownerColumn: unscoped ? null : scoped?.owner_column ?? null,
+    columns,
     rlsManaged: true,
   };
 }

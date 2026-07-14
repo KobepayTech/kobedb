@@ -3,6 +3,7 @@ import { query, invalidateTableCache } from '../db.js';
 import { resolveAuth } from '../auth/middleware.js';
 import { invalidatePolicyCache } from './policy.js';
 import { registerSchemaRoutes } from './schema.js';
+import { registerBackupRoutes } from '../backup/routes.js';
 
 // Admin API for the RLS policy engine. Service-role only.
 export async function policyAdminRoutes(app: FastifyInstance) {
@@ -34,16 +35,17 @@ export async function policyAdminRoutes(app: FastifyInstance) {
     return { table, enabled: enabled !== false };
   });
 
-  // Create a policy.  { table, action, roles?, owner_column?, name? }
+  // Create a policy.  { table, action, roles?, owner_column?, columns?, name? }
   app.post('/admin/policies', async (req, reply) => {
-    const { table, action, roles, owner_column, name } = (req.body ?? {}) as any;
+    const { table, action, roles, owner_column, columns, name } = (req.body ?? {}) as any;
     if (!table || !action) return reply.code(400).send({ error: 'table and action required' });
     if (!['select', 'insert', 'update', 'delete'].includes(action))
       return reply.code(400).send({ error: 'invalid action' });
+    const colList = Array.isArray(columns) && columns.length ? columns : null;
     const { rows } = await query(
-      `insert into kobedb.policies (table_name, action, roles, owner_column, name)
-       values ($1, $2, $3, $4, $5) returning *`,
-      [table, action, roles ?? ['authenticated'], owner_column ?? null, name ?? null],
+      `insert into kobedb.policies (table_name, action, roles, owner_column, columns, name)
+       values ($1, $2, $3, $4, $5, $6) returning *`,
+      [table, action, roles ?? ['authenticated'], owner_column ?? null, colList, name ?? null],
     );
     invalidatePolicyCache();
     return reply.code(201).send(rows[0]);
@@ -59,4 +61,6 @@ export async function policyAdminRoutes(app: FastifyInstance) {
 
   // Schema designer / migrations (DDL + SQL runner). Shares the /admin/ guard above.
   registerSchemaRoutes(app, invalidateTableCache);
+  // Database backups & restore (pg_dump / pg_restore). Shares the /admin/ guard above.
+  registerBackupRoutes(app);
 }

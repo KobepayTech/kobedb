@@ -4,6 +4,7 @@ dist/
 .env
 .env.local
 storage-data/
+backups/
 pgdata/
 *.log
 .DS_Store
