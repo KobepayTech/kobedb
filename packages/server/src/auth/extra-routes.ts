@@ -4,6 +4,8 @@ import { query } from '../db.js';
 import { config } from '../config.js';
 import { issueSession, upsertUserByEmail, type UserRow } from './session.js';
 import { getProvider, isConfigured, buildAuthUrl, providers } from './oauth.js';
+import { sendMagicLinkEmail } from '../email/templates.js';
+import { emailDeliversExternally } from '../email/provider.js';
 
 // In-memory OAuth state store (state -> { provider, redirectTo, expiresAt }).
 const stateStore = new Map<string, { provider: string; redirectTo: string; expiresAt: number }>();
@@ -21,10 +23,11 @@ function takeState(state: string) {
 
 export async function authExtraRoutes(app: FastifyInstance) {
   // ── Magic link (passwordless) ────────────────────────────────────────────
-  // POST /auth/v1/magiclink { email }
-  // Returns an action_link. In production you'd email it instead of returning it.
+  // POST /auth/v1/magiclink { email, redirect_to? }
+  // Emails a sign-in link via the configured provider. In 'log' mode the link is
+  // also returned in the response for local development.
   app.post('/auth/v1/magiclink', async (req, reply) => {
-    const { email } = (req.body ?? {}) as any;
+    const { email, redirect_to } = (req.body ?? {}) as any;
     if (!email) return reply.code(400).send({ error: 'email required' });
     const user = await upsertUserByEmail(email);
     const token = crypto.randomBytes(32).toString('hex');
@@ -33,9 +36,20 @@ export async function authExtraRoutes(app: FastifyInstance) {
       `insert into auth.one_time_tokens (token, user_id, type, expires_at) values ($1, $2, 'magiclink', $3)`,
       [token, user.id, expiresAt],
     );
-    const action_link = `${config.publicUrl}/auth/v1/verify?token=${token}&type=magiclink`;
-    // `action_link` is returned for local/dev use; hook up an email provider for prod.
-    return reply.send({ message: 'magic link generated', action_link, email });
+    let action_link = `${config.publicUrl}/auth/v1/verify?token=${token}&type=magiclink`;
+    if (redirect_to) action_link += `&redirect_to=${encodeURIComponent(redirect_to)}`;
+
+    try {
+      await sendMagicLinkEmail(email, action_link);
+    } catch (err: any) {
+      app.log.error({ err }, 'failed to send magic link email');
+      return reply.code(502).send({ error: `failed to send email: ${err.message}` });
+    }
+
+    // Only expose the raw link when no external provider is configured (dev convenience).
+    const body: Record<string, unknown> = { message: 'magic link sent', email };
+    if (!emailDeliversExternally()) body.action_link = action_link;
+    return reply.send(body);
   });
 
   // GET /auth/v1/verify?token=...&type=magiclink
