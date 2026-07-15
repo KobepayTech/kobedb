@@ -1,0 +1,12 @@
+{
+  "name": "@kobedb/desktop-tauri",
+  "version": "0.1.0",
+  "private": true,
+  "description": "KobeDB Studio native desktop app (Tauri 2) — a ~10MB binary that boots the server and opens Studio.",
+  "scripts": {
+    "tauri": "cargo tauri",
+    "dev": "cargo tauri dev",
+    "build": "cargo tauri build",
+    "build:debug": "cargo tauri build --debug"
+  }
+}

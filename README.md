@@ -320,14 +320,21 @@ kobedb/
 
 ## Desktop app (KobeDB Studio)
 
-A native **Electron** desktop app (`@kobedb/desktop`) boots the server and opens Studio in its own window — no terminal needed. It runs the server with Electron's bundled Node, so end users don't need Node installed.
+Two native desktop shells boot the server and open Studio in its own window — no terminal needed:
+
+- **`@kobedb/desktop-tauri`** — **Tauri 2 + Rust**, ~10 MB, uses the OS webview (inspired by [Terax](https://github.com/crynta/terax-ai)). Needs Node on the host to run the server.
+- **`@kobedb/desktop`** — **Electron**, bundles its own Node (heavier, most familiar).
 
 ```bash
-npm start --workspace @kobedb/desktop            # dev
-npm run dist:win --workspace @kobedb/desktop     # build a Windows .exe (NSIS + portable)
+# Tauri (recommended — tiny binary)
+npm run build --workspace @kobedb/server
+cd packages/desktop-tauri && cargo tauri build     # → .deb/.AppImage/.msi/.dmg per OS
+
+# Electron
+npm run dist:win --workspace @kobedb/desktop        # → Windows .exe (NSIS + portable)
 ```
 
-See `packages/desktop/README.md` for full build instructions (macOS `.dmg`, Linux `.AppImage`). The app packages the server; point `DATABASE_URL` at a Postgres instance.
+See `packages/desktop-tauri/README.md` and `packages/desktop/README.md` for details. Both point `DATABASE_URL` at your Postgres.
 
 ## Security & production hardening
 

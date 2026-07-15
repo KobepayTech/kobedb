@@ -1,6 +1,14 @@
 node_modules/
 dist/
 *.tsbuildinfo
+# Tauri build artifacts
+packages/desktop-tauri/src-tauri/target/
+packages/desktop-tauri/src-tauri/gen/
+# but keep the Tauri app's static frontend (not a build output)
+!packages/desktop-tauri/dist/
+!packages/desktop-tauri/dist/**
+# Electron build output
+packages/desktop/release/
 .env
 .env.local
 storage-data/
