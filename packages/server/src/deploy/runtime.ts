@@ -22,6 +22,8 @@ export interface RunSpec {
   containerPort: number;
   hostPort: number;
   volumes?: { host: string; container: string }[];
+  limitsMemory?: string; // e.g. "512m"
+  limitsCpus?: string; // e.g. "0.5"
 }
 
 export interface ContainerRuntime {
@@ -46,10 +48,27 @@ export function allocatePort(): Promise<number> {
   });
 }
 
-function sh(bin: string, args: string[], onLog?: (l: string) => void): Promise<{ code: number; out: string }> {
+function sh(
+  bin: string,
+  args: string[],
+  onLog?: (l: string) => void,
+  timeoutMs = 600_000,
+): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
     const child = spawn(bin, args);
     let out = '';
+    let done = false;
+    const finish = (code: number) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ code, out });
+    };
+    const timer = setTimeout(() => {
+      if (onLog) onLog(`timed out after ${timeoutMs}ms; killing ${bin}`);
+      child.kill('SIGKILL');
+      finish(124);
+    }, timeoutMs);
     const cap = (d: Buffer) => {
       const s = d.toString();
       out += s;
@@ -57,8 +76,8 @@ function sh(bin: string, args: string[], onLog?: (l: string) => void): Promise<{
     };
     child.stdout.on('data', cap);
     child.stderr.on('data', cap);
-    child.on('error', (e) => resolve({ code: 1, out: out + String(e) }));
-    child.on('close', (code) => resolve({ code: code ?? 0, out }));
+    child.on('error', (e) => { out += String(e); finish(1); });
+    child.on('close', (code) => finish(code ?? 0));
   });
 }
 
@@ -88,13 +107,17 @@ class DockerRuntime implements ContainerRuntime {
 
   async run(spec: RunSpec): Promise<string> {
     const container = `kobedeploy_${spec.name}_${Date.now()}`;
-    const args = ['run', '-d', '--name', container, '-p', `${spec.hostPort}:${spec.containerPort}`];
+    const args = ['run', '-d', '--name', container, '--restart', 'unless-stopped',
+      '--label', 'managed-by=kobedeploy', '-p', `${spec.hostPort}:${spec.containerPort}`];
     for (const [k, v] of Object.entries(spec.env)) {
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) args.push('-e', `${k}=${v}`);
     }
     for (const vol of spec.volumes ?? []) {
       if (vol.host && vol.container) args.push('-v', `${vol.host}:${vol.container}`);
     }
+    // Resource limits (Coolify-style) — validated to safe token shapes.
+    if (spec.limitsMemory && /^\d+[bkmg]?$/i.test(spec.limitsMemory)) args.push('--memory', spec.limitsMemory);
+    if (spec.limitsCpus && /^\d+(\.\d+)?$/.test(spec.limitsCpus)) args.push('--cpus', spec.limitsCpus);
     args.push(spec.image);
     const r = await sh('docker', args);
     if (r.code !== 0) throw new Error(`docker run failed: ${r.out}`);

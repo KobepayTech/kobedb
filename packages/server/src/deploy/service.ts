@@ -17,6 +17,8 @@ export interface App {
   health_check_path: string | null;
   health_check_expected_status: number;
   health_check_retries: number;
+  limits_memory: string | null;
+  limits_cpus: string | null;
   status: string;
   host_port: number | null;
   container_id: string | null;
@@ -99,28 +101,52 @@ export async function deployApp(appId: string): Promise<string> {
       };
       const image = await rt.build(buildSpec);
 
-      // Stop any previous container for this app.
-      if (app.container_id) await rt.remove(app.container_id).catch(() => {});
-
-      const hostPort = app.host_port ?? (await allocatePort());
-      onLog(`starting container on host port ${hostPort}`);
-      const containerId = await rt.run({
+      // ── Zero-downtime (blue-green) rollout ──────────────────────────────
+      // Start the NEW container on a fresh host port while the OLD one keeps
+      // serving. Only after the new container is healthy do we switch traffic
+      // (the proxy reads host_port from the DB), then remove the old container.
+      const oldContainer = app.container_id;
+      const oldPort = app.host_port;
+      const newPort = await allocatePort();
+      onLog(`starting new container on host port ${newPort}`);
+      const newContainer = await rt.run({
         name: app.name,
         image,
         env: app.env ?? {},
         containerPort: app.container_port,
-        hostPort,
+        hostPort: newPort,
         volumes: app.volumes ?? [],
+        limitsMemory: app.limits_memory ?? undefined,
+        limitsCpus: app.limits_cpus ?? undefined,
       });
 
-      // Health check before declaring the app running (Coolify-style gate).
-      const healthy = await waitHealthy(app, hostPort, onLog);
-      const finalStatus = healthy ? 'running' : 'unhealthy';
-      await setApp(appId, { status: finalStatus, host_port: hostPort, container_id: containerId, image_tag: image });
-      await query(
-        `update deploy.deployments set status=$4, image_tag=$2, logs=$3, finished_at=now() where id=$1`,
-        [deploymentId, image, logbuf + `deployment ${healthy ? 'succeeded' : 'unhealthy'}\n`, healthy ? 'running' : 'failed'],
-      );
+      const healthy = await waitHealthy(app, newPort, onLog);
+      if (healthy) {
+        // Atomic switch: subsequent proxied requests hit the new container.
+        await setApp(appId, { status: 'running', host_port: newPort, container_id: newContainer, image_tag: image });
+        onLog('traffic switched to new container');
+        if (oldContainer && oldContainer !== newContainer) {
+          onLog(`removing previous container ${oldContainer}`);
+          await rt.remove(oldContainer).catch(() => {});
+        }
+        await query(
+          `update deploy.deployments set status='running', image_tag=$2, logs=$3, finished_at=now() where id=$1`,
+          [deploymentId, image, logbuf + 'deployment succeeded (zero-downtime switch)\n'],
+        );
+      } else {
+        // Roll back: discard the new container; the old one is still serving.
+        onLog('new container failed health check; rolling back (old container kept serving)');
+        await rt.remove(newContainer).catch(() => {});
+        if (oldContainer) {
+          await setApp(appId, { status: 'running', host_port: oldPort, container_id: oldContainer });
+        } else {
+          await setApp(appId, { status: 'unhealthy' });
+        }
+        await query(
+          `update deploy.deployments set status='failed', image_tag=$2, logs=$3, finished_at=now() where id=$1`,
+          [deploymentId, image, logbuf + 'deployment failed health check; rolled back\n'],
+        );
+      }
     } catch (err: any) {
       onLog(`ERROR: ${err.message}`);
       await setApp(appId, { status: 'failed' });

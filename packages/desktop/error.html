@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+      background: #0f1115; color: #e6e9ef; font: 15px system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 30px;
+    }
+    .logo { font-size: 26px; font-weight: 700; color: #f87171; margin-bottom: 10px; }
+    .muted { color: #8b93a7; max-width: 520px; line-height: 1.6; }
+    code { background: #1f232c; padding: 2px 7px; border-radius: 6px; color: #3ecf8e; }
+  </style>
+</head>
+<body>
+  <div class="logo">⚠️ Server did not start</div>
+  <div class="muted">
+    The KobeDB server couldn't reach its database. Make sure PostgreSQL is running and
+    <code>DATABASE_URL</code> is correct.<br><br>
+    The quickest way is Docker:<br><code>docker compose up -d db</code><br><br>
+    Then reopen the app, or use <b>KobeDB → Restart server</b> from the menu.
+  </div>
+</body>
+</html>

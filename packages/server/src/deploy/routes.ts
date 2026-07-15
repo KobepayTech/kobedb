@@ -87,8 +87,9 @@ export async function deployRoutes(app: FastifyInstance) {
     const { rows } = await query(
       `insert into deploy.apps
          (project_id, name, source_type, source, git_ref, dockerfile, container_port, env, domain,
-          volumes, health_check_path, health_check_expected_status, health_check_retries)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,
+          volumes, health_check_path, health_check_expected_status, health_check_retries,
+          limits_memory, limits_cpus)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning *`,
       [
         b.project_id,
         b.name,
@@ -103,6 +104,8 @@ export async function deployRoutes(app: FastifyInstance) {
         b.health_check_path ?? null,
         b.health_check_expected_status ?? 200,
         b.health_check_retries ?? 10,
+        b.limits_memory ?? null,
+        b.limits_cpus ?? null,
       ],
     );
     return reply.code(201).send(rows[0]);
@@ -120,7 +123,8 @@ export async function deployRoutes(app: FastifyInstance) {
     const id = (req.params as any).id;
     const b = (req.body ?? {}) as any;
     const allowed = ['env', 'domain', 'source', 'source_type', 'git_ref', 'dockerfile', 'container_port',
-      'volumes', 'health_check_path', 'health_check_expected_status', 'health_check_retries'];
+      'volumes', 'health_check_path', 'health_check_expected_status', 'health_check_retries',
+      'limits_memory', 'limits_cpus'];
     const keys = Object.keys(b).filter((k) => allowed.includes(k));
     if (!keys.length) return reply.code(400).send({ error: 'no updatable fields' });
     const jsonCols = new Set(['env', 'volumes']);

@@ -40,6 +40,12 @@ export const config = {
   deployRuntime: (process.env.DEPLOY_RUNTIME ?? 'auto') as 'auto' | 'docker' | 'mock',
   deployProxyEnabled: (process.env.DEPLOY_PROXY_ENABLED ?? 'true') !== 'false',
   deployProxyPort: num(process.env.DEPLOY_PROXY_PORT, 8090),
+  // TLS for the deploy proxy. When enabled without a cert/key, a self-signed cert
+  // is generated for local development.
+  deployProxyTls: (process.env.DEPLOY_PROXY_TLS ?? 'false') === 'true',
+  deployProxyCertFile: process.env.DEPLOY_PROXY_CERT_FILE ?? '',
+  deployProxyKeyFile: process.env.DEPLOY_PROXY_KEY_FILE ?? '',
+  certDir: process.env.CERT_DIR ?? './certs',
 
   functionsPath: process.env.FUNCTIONS_PATH ?? './functions',
   functionTimeoutMs: num(process.env.FUNCTION_TIMEOUT_MS, 10000),
@@ -55,6 +61,12 @@ export const config = {
   smtpUser: process.env.SMTP_USER ?? '',
   smtpPass: process.env.SMTP_PASS ?? '',
   resendApiKey: process.env.RESEND_API_KEY ?? '',
+
+  // Security: rate limiting (per client IP)
+  rateLimitEnabled: (process.env.RATE_LIMIT_ENABLED ?? 'true') !== 'false',
+  rateLimitWindowMs: num(process.env.RATE_LIMIT_WINDOW_MS, 60_000),
+  rateLimitMax: num(process.env.RATE_LIMIT_MAX, 300), // general requests / window
+  rateLimitAuthMax: num(process.env.RATE_LIMIT_AUTH_MAX, 10), // sensitive auth requests / window
 
   studioEnabled: (process.env.STUDIO_ENABLED ?? 'true') !== 'false',
 };

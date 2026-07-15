@@ -15,6 +15,8 @@ import { realtimePlugin } from './realtime/index.js';
 import { functionRoutes } from './functions/routes.js';
 import { deployRoutes } from './deploy/routes.js';
 import { startDeployProxy } from './deploy/proxy.js';
+import { registerSecurity } from './security/plugin.js';
+import { enforceSecurity } from './security/startup.js';
 
 const app = Fastify({
   logger: { level: process.env.LOG_LEVEL ?? 'info' },
@@ -27,8 +29,12 @@ app.addContentTypeParser('*', { parseAs: 'buffer' }, (_req, body, done) => {
 });
 
 async function main() {
+  // Fail fast on insecure production config (default/weak secrets).
+  enforceSecurity(app.log);
+
   await app.register(cors, { origin: true });
   await app.register(websocket);
+  registerSecurity(app); // hooks on the root instance → apply to all routes
 
   // Centralised error shape.
   app.setErrorHandler((err: any, _req, reply) => {
