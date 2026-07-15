@@ -318,10 +318,25 @@ kobedb/
 └── .env.example
 ```
 
-## Security notes
+## Desktop app (KobeDB Studio)
 
-- Change `JWT_SECRET` and `SERVICE_ROLE_KEY` before deploying.
-- The auto REST API allows open **reads**; **writes** require an authenticated user or the service-role key. Tighten this per-table for production (e.g. add ownership checks / row filters).
+A native **Electron** desktop app (`@kobedb/desktop`) boots the server and opens Studio in its own window — no terminal needed. It runs the server with Electron's bundled Node, so end users don't need Node installed.
+
+```bash
+npm start --workspace @kobedb/desktop            # dev
+npm run dist:win --workspace @kobedb/desktop     # build a Windows .exe (NSIS + portable)
+```
+
+See `packages/desktop/README.md` for full build instructions (macOS `.dmg`, Linux `.AppImage`). The app packages the server; point `DATABASE_URL` at a Postgres instance.
+
+## Security & production hardening
+
+- **Startup guard:** with `NODE_ENV=production`, the server **refuses to boot** if `JWT_SECRET`/`SERVICE_ROLE_KEY` are the built-in defaults or too short (warnings only in dev).
+- **Rate limiting:** per-IP limits on all requests, with a stricter bucket for `login`/`signup`/`magiclink` (`RATE_LIMIT_*`); returns `429` with `Retry-After`.
+- **Security headers:** `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` on every response.
+- **Deploy proxy TLS:** enable HTTPS with `DEPLOY_PROXY_TLS=true` (bring your own cert/key, or a self-signed one is generated for dev).
+- **Zero-downtime deploys:** redeploys start the new container, health-check it, then atomically switch traffic and remove the old one — verified as 0 failed requests under continuous load; failed health checks roll back with the old container still serving.
+- Change `JWT_SECRET` and `SERVICE_ROLE_KEY` before deploying; treat the service-role key like root (it powers the admin, schema, backup and deploy APIs).
 - All identifiers are validated and all values are parameterized to prevent SQL injection.
 
 ## Roadmap
@@ -335,8 +350,11 @@ kobedb/
 - ✅ Database backups & restore (`pg_dump` / `pg_restore`)
 - ✅ Per-column RLS
 - ✅ KobeDeploy — Coolify-style app platform (image/git deploys, domains, proxy, per-project DB)
+- ✅ Zero-downtime deploys, health checks & resource limits
+- ✅ Security hardening (startup guard, rate limiting, security headers) + deploy-proxy TLS
+- ✅ Desktop app (Electron) — launch Studio as a native window / installer
 - Automatic TLS for deploy domains (ACME/Let's Encrypt)
-- Zero-downtime deploys & health checks
+- Remote-server (SSH) deploy targets & multi-node
 - Point-in-time restore (WAL archiving)
 - Richer policy expressions (arbitrary SQL predicates)
 
